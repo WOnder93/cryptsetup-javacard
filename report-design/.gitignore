@@ -1,0 +1,10 @@
+# Tex
+*.*pk
+*.tfm
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.synctex.gz
+*.toc
