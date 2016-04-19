@@ -12,13 +12,13 @@ import javacard.security.*;
  *
  * @author ondrej
  */
-public class JCKeyStorageApplet extends Applet {
+public class KeyStorageApplet extends Applet {
     public static final byte[] AID = new byte[] {
         (byte)0x4a, (byte)0x43, (byte)0x4b, (byte)0x65, (byte)0x79, (byte)0x53,
         (byte)0x74, (byte)0x6f, (byte)0x72, (byte)0x61, (byte)0x67, (byte)0x65
     };
     
-    public static final byte CLA_SIGNAPPLET = (byte)0xB0;
+    public static final byte CLA_KEYSTORAGEAPPLET = (byte)0xB0;
     
     @Override
     public void process(APDU apdu) throws ISOException {
