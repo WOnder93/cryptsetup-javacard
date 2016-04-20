@@ -9,8 +9,9 @@ import javacard.framework.*;
 import javacard.security.*;
 
 /**
- *
- * @author ondrej
+ * The applet for secure key storage on a smart card.
+ * @author Manoja Kumar Das
+ * @author Ondrej Mosnacek &lt;omosnacek@gmail.com&gt;
  */
 public class KeyStorageApplet extends Applet {
     public static final byte[] AID = new byte[] {
