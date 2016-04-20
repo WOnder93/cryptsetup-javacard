@@ -6,8 +6,8 @@
 package jckeystorage;
 
 /**
- *
- * @author ondrej
+ * The main class.
+ * @author Ondrej Mosnacek &lt;omosnacek@gmail.com&gt;
  */
 public class JCKeyStorage {
 
