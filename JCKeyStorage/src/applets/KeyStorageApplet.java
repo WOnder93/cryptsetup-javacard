@@ -20,7 +20,6 @@ public class KeyStorageApplet extends Applet {
     
     public static final byte CLA_KEYSTORAGEAPPLET = (byte)0xB0;
     
-    @Override
     public void process(APDU apdu) throws ISOException {
         throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
     }
