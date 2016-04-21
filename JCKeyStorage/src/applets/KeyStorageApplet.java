@@ -7,6 +7,7 @@ package applets;
 
 import javacard.framework.*;
 import javacard.security.*;
+import javacardx.crypto.Cipher;
 
 /**
  * The applet for secure key storage on a smart card.
@@ -14,6 +15,7 @@ import javacard.security.*;
  * @author Ondrej Mosnacek &lt;omosnacek@gmail.com&gt;
  */
 public class KeyStorageApplet extends Applet {
+    
     public static final byte[] AID = new byte[] {
         (byte)0x4a, (byte)0x43, (byte)0x4b, (byte)0x65, (byte)0x79, (byte)0x53,
         (byte)0x74, (byte)0x6f, (byte)0x72, (byte)0x61, (byte)0x67, (byte)0x65
@@ -33,7 +35,11 @@ public class KeyStorageApplet extends Applet {
     public static final byte CMD_DELKEY     = (byte)0x05;
     public static final byte CMD_CLOSE      = (byte)0x06;
     
-    public static final short RSA_BITS = 2048;
+    public static final short RSA_BITS = KeyBuilder.LENGTH_RSA_2048;
+    public static final short EC_BITS = KeyBuilder.LENGTH_EC_FP_192;
+    
+    public static final byte MAX_PW_TRIES = 5;
+    public static final byte MAX_PW_LEN = 64;
     
     /* secp192r1, as per http://www.secg.org/sec2-v2.pdf */
     public static final byte[] EC_FP_P = new byte[] {
@@ -92,7 +98,157 @@ public class KeyStorageApplet extends Applet {
         AUTHENTICATED,
     };
     
-    public void process(APDU apdu) throws ISOException {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+    private State state;
+
+    private final OwnerPIN masterPassword;
+    
+    private final KeyPair signingKeyPair;
+    private final Signature signature;
+    
+    private final ECPublicKey dhPubKey;
+    private final ECPrivateKey dhPrivKey;
+    private final KeyPair dhKeyPair;
+    private final KeyAgreement sessKeyAgreement;
+    
+    private final AESKey cipherKey;
+    private final Cipher cipher;
+    
+    private final HMACKey macKey;
+    private final Signature mac;
+    
+    private short seqNum;
+    
+    /* TODO ... */
+    
+    private KeyStorageApplet(byte[] bArray, short bOffset, byte bLength) throws ISOException {
+        state = State.IDLE;
+        
+        masterPassword = new OwnerPIN(MAX_PW_TRIES, MAX_PW_LEN);
+        if (bLength == 0) {
+            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        } else {
+            /* set master password from install data: */
+            masterPassword.update(bArray, bOffset, bLength);
+        }
+        
+        signingKeyPair = new KeyPair(KeyPair.ALG_RSA_CRT, RSA_BITS);
+        signingKeyPair.genKeyPair();
+        
+        signature = Signature.getInstance(Signature.ALG_RSA_SHA_PKCS1, false);
+        
+        /* prepare an ANSI X9.62 uncompressed EC point representation for G: */
+        byte[] gBuf = new byte[(short)1 + (short)EC_FP_G_x.length + (short)EC_FP_G_y.length];
+        gBuf[0] = 0x04;
+        short off = 1;
+        off = Util.arrayCopy(EC_FP_G_x, (short)0, gBuf, off, (short)EC_FP_G_x.length);
+        off = Util.arrayCopy(EC_FP_G_y, (short)0, gBuf, off, (short)EC_FP_G_y.length);
+        
+        /* pre-set basic EC parameters: */
+        dhPubKey = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC,  EC_BITS, false);
+        dhPubKey.setFieldFP(EC_FP_P, (short)0, (short)EC_FP_P.length);
+        dhPubKey.setA(EC_FP_A, (short)0, (short)EC_FP_A.length);
+        dhPubKey.setB(EC_FP_B, (short)0, (short)EC_FP_B.length);
+        dhPubKey.setG(gBuf,    (short)0, (short)gBuf.length);
+        dhPubKey.setR(EC_FP_R, (short)0, (short)EC_FP_R.length);
+        dhPubKey.setK(EC_FP_K);
+
+        dhPrivKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, EC_BITS, false);
+        dhPrivKey.setFieldFP(EC_FP_P, (short)0, (short)EC_FP_P.length);
+        dhPrivKey.setA(EC_FP_A, (short)0, (short)EC_FP_A.length);
+        dhPrivKey.setB(EC_FP_B, (short)0, (short)EC_FP_B.length);
+        dhPrivKey.setG(gBuf,    (short)0, (short)gBuf.length);
+        dhPrivKey.setR(EC_FP_R, (short)0, (short)EC_FP_R.length);
+        dhPrivKey.setK(EC_FP_K);
+        
+        dhKeyPair = new KeyPair(dhPubKey, dhPrivKey);
+        sessKeyAgreement = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DHC, false);
+        
+        cipherKey = (AESKey)KeyBuilder.buildKey(KeyBuilder.TYPE_AES_TRANSIENT_DESELECT,
+                KeyBuilder.LENGTH_AES_256, false);
+        cipher = Cipher.getInstance(Cipher.ALG_AES_BLOCK_128_CBC_NOPAD, false);
+        
+        macKey = (HMACKey)KeyBuilder.buildKey(KeyBuilder.TYPE_HMAC_TRANSIENT_DESELECT,
+                KeyBuilder.LENGTH_HMAC_SHA_256_BLOCK_64, false);
+        mac = Signature.getInstance(Signature.ALG_HMAC_SHA_256, false);
+        /* TODO: ... */
+    }
+    
+    public final boolean select() {
+        state = State.IDLE;
+        seqNum = 0;
+        /* TODO: ... */
+        return true;
+    }
+     
+    /**
+     * Method installing the applet.
+     * @param bArray the array constaining installation parameters
+     * @param bOffset the starting offset in bArray
+     * @param bLength the length in bytes of the data parameter in bArray
+     */
+    public static void install(byte[] bArray, short bOffset, byte bLength) throws ISOException {
+        KeyStorageApplet applet = new KeyStorageApplet(bArray, bOffset, bLength);
+        applet.register();
+    }
+
+    /**
+     * Utility method to write the RSA public key into a buffer.
+     * (Copied from HW02 solution)
+     * @param buffer the output buffer
+     * @param offset the output buffer offset
+     * @return the size of the data written
+     * @throws ISOException
+     */
+    private short fillPubKey(byte[] buffer, short offset) throws ISOException {
+        short totalSize = 0;
+        RSAPublicKey pubKey = (RSAPublicKey)signingKeyPair.getPublic();
+        
+        short modSizeOffset = offset;
+        short modOffset = (short)(offset + 2);
+        
+        short modSize = pubKey.getModulus(buffer, modOffset);
+        buffer[modSizeOffset] = (byte)(modSize & 0xFF);
+        buffer[modSizeOffset + 1] = (byte)((modSize >> 8) & 0xFF);
+        totalSize += 2;
+        totalSize += modSize;
+        
+        short expSizeOffset = (short)(modOffset + modSize);
+        short expOffset = (short)(expSizeOffset + 2);
+        
+        short expSize = pubKey.getExponent(buffer, expOffset);
+        buffer[expSizeOffset] = (byte)(expSize & 0xFF);
+        buffer[expSizeOffset + 1] = (byte)((expSize >> 8) & 0xFF);
+        totalSize += 2;
+        totalSize += expSize;
+        
+        return totalSize;
+    }
+    
+    public final void process(APDU apdu) throws ISOException {
+        // ignore the applet select command dispached to the process
+        if (selectingApplet())
+            return;
+
+        short dataLen = apdu.setIncomingAndReceive();
+        byte[] apduBuffer = apdu.getBuffer();
+        
+        if (apduBuffer[ISO7816.OFFSET_CLA] != CLA_KEYSTORAGEAPPLET) {
+            ISOException.throwIt(ISO7816.SW_CLA_NOT_SUPPORTED);
+        }
+        
+        short size;
+        switch(apduBuffer[ISO7816.OFFSET_INS]) {
+            /* TODO: ... */
+            default:
+                ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
+                break;
+        }
+    }
+    
+    private short processCommand(byte[] buffer, short offset, short length) {
+        /* TODO */
+        /* first byte is the command code; response data should be written
+         * to the same buffer and its size returned */
+        return -1;
     }
 }
