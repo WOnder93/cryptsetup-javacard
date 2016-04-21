@@ -1,0 +1,98 @@
+States:
+    IDLE
+    KEY_ESTABILISHED
+    AUTHENTICATED
+
+NOTE: All numbers shall be stored as little-endian.
+
+Session keys derivation:
+    DH exchange -> key material --[HMAC-SHA256 with data = {0xEE}]--> session encryption key
+                                \-[HMAC-SHA256 with data = {0xAA}]--> session integrity key
+
+APDU Instructions:
+    INS_GETPUBKEY
+        States: (any)
+        Request: (no data)
+        Response:
+            2 bytes                 - modulus length
+            <modulus length> bytes  - modulus
+            2 bytes                 - exponent length
+            <exponent length> bytes - exponent
+    INS_HANDSHAKE
+        Description: Performs the DH exchange to estabilish the session key
+        States: IDLE -> KEY_ESTABILISHED
+        Request:
+            2 bytes                     - host public data length
+            <host public data length>   - host public data
+        Response:
+            2 bytes                         - signature length
+            <signature length> bytes        - signature of the following data
+            2 bytes                         - card public data length
+            <card public data length> bytes - card public data
+            2 bytes                         - host public data length
+            <host public data length>       - host public data
+    INS_COMMAND
+        Description: Issues a command over the secure channel.
+        States: all but IDLE
+        Request:
+            32 bytes - HMAC-SHA256 auth. code using session integrity key
+            4 bytes  - seq. number
+            16 bytes - IV
+            (the rest) - data encrypted with the session encryption key:
+                1 byte - command ID
+                2 bytes - command data length // we need to specify the length, because JavaCard 2.2.2 doesn't support AES-CBC with padding
+                <command data length> bytes - command data
+        Response:
+            32 bytes - HMAC-SHA256 auth. code using session integrity key
+            4 bytes  - seq. number
+            16 bytes - IV
+            (the rest) - response data encrypted with the session encryption key
+                2 bytes - response data length
+                <response data length> bytes - response data
+
+Encrypted commands:
+    CMD_AUTH
+        Description: Sends the master password to the card to authenticate the host (user).
+        States: KEY_ESTABILISHED -> AUTHENTICATED (on success) | IDLE (on error)
+        Request:
+            (arbitrary length) - master password
+        Response: (empty or error)
+    CMD_CHANGEPW
+        Description: Changes the master password to a new value.
+        States: AUTHENTICATED
+        Request:
+            (arbitrary length) - new master password
+        Response: (empty or error)
+    CMD_GENKEY
+        Description: Generates an encryption key.
+        States: AUTHENTICATED
+        Request:
+            1 byte - requested key length
+        Response:
+            <requested key length> bytes - the generated key
+    CMD_STOREKEY
+        Description: Stores a LUKS encryption key on the card.
+        States: AUTHENTICATED
+        Request:
+            40 bytes - the partition UUID
+            1 byte - key length
+            <key length> bytes - key
+        Response: (empty or error)
+    CMD_LOADKEY
+        Description: Loads a LUKS encryption key from the card.
+        States: AUTHENTICATED
+        Request:
+            40 bytes - the partition UUID
+        Response:
+            (arbitrary length) - the key
+    CMD_DELKEY
+        Description: Deletes a LUKS encryption key from the card.
+        States: AUTHENTICATED
+        Request:
+            40 bytes - the partition UUID
+        Response: (empty or error)
+    CMD_CLOSE
+        Description: Closes the secure channel.
+        States: AUTHENTICATED -> IDLE
+        Request: (empty)
+        Response: (empty or error)
