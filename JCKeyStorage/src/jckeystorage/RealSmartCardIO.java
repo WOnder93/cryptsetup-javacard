@@ -39,13 +39,14 @@ public final class RealSmartCardIO implements SmartCardIO {
 
     @Override
     public boolean selectApplet(byte[] aidArray) {
+        ResponseAPDU res;
         try {
-            channel.transmit(new CommandAPDU(
+            res = channel.transmit(new CommandAPDU(
                     ISO7816.CLA_ISO7816, ISO7816.INS_SELECT, 0, 0, aidArray));
-        } catch (ISOException | CardException ex) {
+        } catch (CardException ex) {
             return false;
         }
-        return true;
+        return (short)res.getSW() == ISO7816.SW_NO_ERROR;
     }
 
     @Override
