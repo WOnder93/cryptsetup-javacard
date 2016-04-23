@@ -13,3 +13,4 @@ hs_err_pid*
 
 # Netbeans
 /JCKeyStorage/nbproject/private/
+/JCKeyStorage/build/

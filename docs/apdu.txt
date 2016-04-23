@@ -36,7 +36,7 @@ APDU Instructions:
         States: all but IDLE
         Request:
             32 bytes - HMAC-SHA256 auth. code using session integrity key
-            4 bytes  - seq. number
+            2 bytes  - seq. number
             16 bytes - IV
             (the rest) - data encrypted with the session encryption key:
                 1 byte - command ID
@@ -44,7 +44,7 @@ APDU Instructions:
                 <command data length> bytes - command data
         Response:
             32 bytes - HMAC-SHA256 auth. code using session integrity key
-            4 bytes  - seq. number
+            2 bytes  - seq. number
             16 bytes - IV
             (the rest) - response data encrypted with the session encryption key
                 2 bytes - response data length

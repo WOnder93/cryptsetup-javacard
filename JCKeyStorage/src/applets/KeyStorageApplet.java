@@ -38,6 +38,14 @@ public class KeyStorageApplet extends Applet {
     public static final short RSA_BITS = KeyBuilder.LENGTH_RSA_2048;
     public static final short EC_BITS = KeyBuilder.LENGTH_EC_FP_192;
     
+    public static final byte[] KEY_LABEL_ENC = new byte[] { (byte)0xEE };
+    public static final byte[] KEY_LABEL_AUTH = new byte[] { (byte)0xAA };
+    
+    public static final short MAC_LENGTH = 32;
+    public static final short SEQNUM_LENGTH = 2;
+    public static final short BLOCK_LENGTH = 16;
+    public static final short IV_LENGTH = 16;
+    
     public static final byte MAX_PW_TRIES = 5;
     public static final byte MAX_PW_LEN = 64;
     
