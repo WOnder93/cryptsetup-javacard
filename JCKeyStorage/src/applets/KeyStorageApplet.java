@@ -232,6 +232,46 @@ public class KeyStorageApplet extends Applet {
         return totalSize;
     }
     
+    private short dhHandshake (APDU apdu) {
+        byte[]    apdubuf = apdu.getBuffer();
+        short     dataLen = apdu.getIncomingLength();
+        
+        short      pubdataLen = (short)(apdubuf[ISO7816.OFFSET_CDATA] & 0xFF);
+        pubdataLen |= (short)((short)(apdubuf[ISO7816.OFFSET_CDATA + 1] & 0xFF) << 8);
+        short pubDataOffset = (short) (ISO7816.OFFSET_CDATA + 2);
+        
+        dhKeyPair.genKeyPair();
+        
+        byte[] sessKey = new byte[EC_BITS/8];
+        short sessKeyLen = sessKeyAgreement.generateSecret(apdubuf, pubDataOffset, pubdataLen, sessKey, (short)0);
+        /* process the session key... */
+        
+        short sigLength = signature.getLength();
+        short sigLengthOffset = ISO7816.OFFSET_CDATA;
+        short sigOffset = (short)(sigLengthOffset + 2);
+        
+        short pdLengthOffset = (short)(sigOffset + sigLength);
+        short pdOffset = (short)(pdLengthOffset + 2);
+        
+        Util.arrayCopy(apdubuf, ISO7816.OFFSET_CDATA, apdubuf, pdLengthOffset, (short)(2 + pubdataLen));
+        
+        short cardpdLengthOffset = (short)(pdOffset + pubdataLen);
+        short cardpdOffset = (short)(cardpdLengthOffset + 2);
+        
+        ECPublicKey pubKey = (ECPublicKey)dhKeyPair.getPublic();
+        short cardpdLength = pubKey.getW(apdubuf, cardpdOffset);
+        apdubuf[cardpdLengthOffset] = (byte)(cardpdLength & 0xFF);
+        apdubuf[cardpdLengthOffset + 1] = (byte)((cardpdLength >> 8) & 0xFF);
+        
+        signature.sign(apdubuf, pdLengthOffset,
+                (short)((short)((short)(2 + pubdataLen) + 2) + cardpdLength),
+                apdubuf, sigOffset);
+        apdubuf[sigLengthOffset] = (byte)(sigLength & 0xFF);
+        apdubuf[sigLengthOffset + 1] = (byte)((sigLength >> 8) & 0xFF);
+        
+        return (short)((short)(cardpdOffset - sigLengthOffset) + cardpdLength);
+    }
+    
     public final void process(APDU apdu) throws ISOException {
         // ignore the applet select command dispached to the process
         if (selectingApplet())
@@ -246,6 +286,10 @@ public class KeyStorageApplet extends Applet {
         
         short size;
         switch(apduBuffer[ISO7816.OFFSET_INS]) {
+            case INS_HANDSHAKE:
+                size = dhHandshake(apdu);
+                apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA, size);
+                break;
             /* TODO: ... */
             default:
                 ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
