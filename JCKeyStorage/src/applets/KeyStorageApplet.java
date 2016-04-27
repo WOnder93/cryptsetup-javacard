@@ -288,14 +288,14 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     }
     
     short InsCommand(APDU apdu) {
-		byte[]    apdubuf = apdu.getBuffer();
-      		short     dataLen = apdu.setIncomingAndReceive();
-          
-                short dataOffset = apdu.getOffsetCdata() ;
-                short seqNumOffset = (short)(dataOffset + MAC_LENGTH);
-                short ivOffset = (short)(seqNumOffset + SEQNUM_LENGTH);
-                short payloadOffset = (short)(ivOffset + IV_LENGTH);
-        ////    mac.verify
+        byte[]    apdubuf = apdu.getBuffer();
+        short     dataLen = apdu.setIncomingAndReceive();
+
+        short dataOffset = apdu.getOffsetCdata() ;
+        short seqNumOffset = (short)(dataOffset + MAC_LENGTH);
+        short ivOffset = (short)(seqNumOffset + SEQNUM_LENGTH);
+        short payloadOffset = (short)(ivOffset + IV_LENGTH);
+        
         mac.init(macKey, Signature.MODE_VERIFY);
 	if (!mac.verify(apdubuf, seqNumOffset, (short)(dataLen - seqNumOffset), apdubuf, dataOffset, MAC_LENGTH)) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
@@ -308,14 +308,15 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         
-        // INIT CIPHERS WITH NEW KEY
         cipher.init(cipherKey, Cipher.MODE_DECRYPT);        
-        cipher.doFinal(apdubuf, (short)(ISO7816.OFFSET_CDATA + 50), (short) (dataLen-50), apdubuf, (short)(ISO7816.OFFSET_CDATA + 50));
+        cipher.doFinal(
+                apdubuf, payloadOffset, (short) (dataLen - payloadOffset),
+                apdubuf, payloadOffset);
                
         short payloadLength = processCommand (apdubuf, payloadOffset);
-        short extra = (short)(payloadLength % 16);
+        short extra = (short)(payloadLength % BLOCK_LENGTH);
         if (extra != 0) {
-            payloadLength = (short)(payloadLength + (short)(16 - extra));
+            payloadLength = (short)(payloadLength + (short)(BLOCK_LENGTH - extra));
         }
         /*  Not completed ....... */  
         return (short)((short)(payloadOffset + payloadLength) - dataOffset);
@@ -346,7 +347,6 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
                 size = InsCommand(apdu);
                 apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
                 break;
-            /* TODO: ... */
             default:
                 ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
                 break;
@@ -389,7 +389,6 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     }
 
     private short processCommand(byte[] buffer, short offset ) {
-        /* TODO */
         /* first byte is the command code; response data should be written
          * to the same buffer and its size returned */
         byte command = buffer[offset];
@@ -398,15 +397,13 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         
         short dataOffset = (short)(offset + 3);
 	switch(command) {
-         
-	 	case CMD_AUTH       : commandLen = commandAuth(buffer, dataOffset, commandLen); break;
-                case CMD_CHANGEPW   : commandLen = commandChangePw(buffer, dataOffset, commandLen); break;
-                case CMD_GENKEY     : commandLen = commandGenKey(buffer, dataOffset, commandLen); break;
-		case CMD_STOREKEY   : commandLen = commandStoreKey(buffer, dataOffset, commandLen); break;
-                case CMD_LOADKEY    : commandLen = commandLoadKey(buffer, dataOffset, commandLen); break;
-                case CMD_DELKEY     : commandLen = commandDelKey(buffer, dataOffset, commandLen); break;
-		case CMD_CLOSE      : commandLen = commandClose(buffer, dataOffset, commandLen); break;
-	
+            case CMD_AUTH       : commandLen = commandAuth(buffer, dataOffset, commandLen); break;
+            case CMD_CHANGEPW   : commandLen = commandChangePw(buffer, dataOffset, commandLen); break;
+            case CMD_GENKEY     : commandLen = commandGenKey(buffer, dataOffset, commandLen); break;
+            case CMD_STOREKEY   : commandLen = commandStoreKey(buffer, dataOffset, commandLen); break;
+            case CMD_LOADKEY    : commandLen = commandLoadKey(buffer, dataOffset, commandLen); break;
+            case CMD_DELKEY     : commandLen = commandDelKey(buffer, dataOffset, commandLen); break;
+            case CMD_CLOSE      : commandLen = commandClose(buffer, dataOffset, commandLen); break;
             default:
                 ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
                 break;
