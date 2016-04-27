@@ -27,10 +27,10 @@ APDU Instructions:
         Response:
             2 bytes                         - signature length
             <signature length> bytes        - signature of the following data
-            2 bytes                         - card public data length
-            <card public data length> bytes - card public data
             2 bytes                         - host public data length
             <host public data length>       - host public data
+            2 bytes                         - card public data length
+            <card public data length> bytes - card public data
     INS_COMMAND
         Description: Issues a command over the secure channel.
         States: all but IDLE
