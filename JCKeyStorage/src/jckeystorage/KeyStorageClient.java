@@ -8,82 +8,87 @@ package jckeystorage;
 import applets.KeyStorageApplet;
 import java.math.BigInteger;
 import java.nio.charset.Charset;
-import java.security.KeyFactory;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.Signature;
 import java.security.GeneralSecurityException;
-import java.security.InvalidKeyException;
-import java.security.interfaces.ECPublicKey;
-import java.security.interfaces.RSAPublicKey;
-import java.security.spec.ECFieldFp;
-import java.security.spec.ECParameterSpec;
-import java.security.spec.ECPoint;
-import java.security.spec.ECPublicKeySpec;
-import java.security.spec.EllipticCurve;
-import java.security.spec.InvalidKeySpecException;
-import java.security.spec.RSAPublicKeySpec;
+import java.security.SecureRandom;
 import java.util.Arrays;
 import javacard.framework.ISO7816;
 import javacard.framework.ISOException;
-import javax.crypto.Cipher;
-import javax.crypto.KeyAgreement;
-import javax.crypto.Mac;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 import javax.smartcardio.CommandAPDU;
 import javax.smartcardio.ResponseAPDU;
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair;
+import org.bouncycastle.crypto.BlockCipher;
+import org.bouncycastle.crypto.agreement.ECDHCBasicAgreement;
+import org.bouncycastle.crypto.digests.SHA1Digest;
+import org.bouncycastle.crypto.digests.SHA256Digest;
+import org.bouncycastle.crypto.engines.AESEngine;
+import org.bouncycastle.crypto.generators.ECKeyPairGenerator;
+import org.bouncycastle.crypto.macs.HMac;
+import org.bouncycastle.crypto.modes.CBCBlockCipher;
+import org.bouncycastle.crypto.params.ECDomainParameters;
+import org.bouncycastle.crypto.params.ECKeyGenerationParameters;
+import org.bouncycastle.crypto.params.ECPublicKeyParameters;
+import org.bouncycastle.crypto.params.KeyParameter;
+import org.bouncycastle.crypto.params.ParametersWithIV;
+import org.bouncycastle.crypto.params.RSAKeyParameters;
+import org.bouncycastle.crypto.signers.RSADigestSigner;
+import org.bouncycastle.math.ec.ECCurve;
+import org.bouncycastle.math.ec.ECPoint;
+import org.bouncycastle.math.ec.custom.sec.SecP192R1Curve;
 
 /**
  * The client for interfacing with the applet.
  * @author Ondrej Mosnacek &lt;omosnacek@gmail.com&gt;
  */
 public class KeyStorageClient {
+        
+    private static final int MAX_RESPONSE_SIZE = 32767;
     
-    public static int EC_KEY_BITS = 128;
-    
-    private static ECParameterSpec getECParameters() throws GeneralSecurityException {
-        ECFieldFp field = new ECFieldFp(new BigInteger(1, KeyStorageApplet.EC_FP_P));
-        BigInteger a = new BigInteger(1, KeyStorageApplet.EC_FP_A);
-        BigInteger b = new BigInteger(1, KeyStorageApplet.EC_FP_B);
-        EllipticCurve curve = new EllipticCurve(field, a, b);
-
+    private static ECDomainParameters getECParameters() {
+        ECCurve curve = new SecP192R1Curve();
+        
         BigInteger g_x = new BigInteger(1, KeyStorageApplet.EC_FP_G_x);
         BigInteger g_y = new BigInteger(1, KeyStorageApplet.EC_FP_G_y);
-        ECPoint g = new ECPoint(g_x, g_y);
-
+        ECPoint g = curve.createPoint(g_x, g_y);
+        
         BigInteger n = new BigInteger(1, KeyStorageApplet.EC_FP_R);
-
-        return new ECParameterSpec(curve, g, n, KeyStorageApplet.EC_FP_K);
+        return new ECDomainParameters(curve, g, n, BigInteger.valueOf(KeyStorageApplet.EC_FP_K));
     }
     
     private final SmartCardIO io;
     
-    private final KeyFactory rsaKeyFactory;
-    private final ECParameterSpec ecParams;
-    private final KeyFactory ecKeyFactory;
-    private final KeyPairGenerator ecKeyGenerator;
-    private final Signature rsaPkcs1Signature;
-    private final KeyAgreement ecdh;
-    private final Mac hmac256;
-    private final Cipher aescbc; 
+    private final SecureRandom random;
+    
+    private final SHA1Digest sha1;
+    private final SHA256Digest sha256;
+    private final RSADigestSigner rsaSignature;
+    private final ECDomainParameters ecParams;
+    private final ECKeyPairGenerator ecKeyGenerator;
+    private final ECDHCBasicAgreement ecdh;
+    private final HMac hmac256;
+    private final BlockCipher aesCbc; 
     
     public KeyStorageClient(SmartCardIO io) throws GeneralSecurityException {
         this.io = io;
         
-        rsaKeyFactory = KeyFactory.getInstance("RSA");
-        ecKeyFactory = KeyFactory.getInstance("EC");
+        random = SecureRandom.getInstanceStrong();
+        
+        sha1 = new SHA1Digest();
+        sha256 = new SHA256Digest();
         ecParams = getECParameters();
-        ecKeyGenerator = KeyPairGenerator.getInstance("EC");
-        ecKeyGenerator.initialize(ecParams);
-        rsaPkcs1Signature = Signature.getInstance("SHA1withRSA");
-        ecdh = KeyAgreement.getInstance("ECDH");
-        hmac256 = Mac.getInstance("HmacSHA256");
-        aescbc = Cipher.getInstance("AES/CBC/NoPadding");
+        ecKeyGenerator = new ECKeyPairGenerator();
+        ecKeyGenerator.init(new ECKeyGenerationParameters(ecParams, random));
+        rsaSignature = new RSADigestSigner(sha1);
+        ecdh = new ECDHCBasicAgreement();
+        hmac256 = new HMac(sha256);
+        aesCbc = new CBCBlockCipher(new AESEngine());
+    }
+    
+    private static byte[] encodePassword(String password) {
+        return Charset.forName("UTF-8").encode(password).array();
     }
     
     public final void installApplet(String masterPassword) {
-        byte[] pwdBytes = Charset.forName("UTF-8").encode(masterPassword).array();
+        byte[] pwdBytes = encodePassword(masterPassword);
         io.installApplet(KeyStorageApplet.AID, KeyStorageApplet.class, pwdBytes);
     }
     
@@ -91,7 +96,7 @@ public class KeyStorageClient {
         return io.selectApplet(KeyStorageApplet.AID);
     }
     
-    private ResponseAPDU checkError(ResponseAPDU apdu) {
+    private static ResponseAPDU checkError(ResponseAPDU apdu) {
         short sw = (short)apdu.getSW();
         if (sw != ISO7816.SW_NO_ERROR) {
             ISOException.throwIt(sw);
@@ -101,23 +106,23 @@ public class KeyStorageClient {
     
     private ResponseAPDU sendInstruction(int insCode) {
         CommandAPDU apdu = new CommandAPDU(KeyStorageApplet.CLA_KEYSTORAGEAPPLET,
-                insCode, 0, 0);
+                insCode, 0, 0, MAX_RESPONSE_SIZE);
         return checkError(io.transmitCommand(apdu));
     }
     
     private ResponseAPDU sendInstruction(int insCode, byte[] data) {
         CommandAPDU apdu = new CommandAPDU(KeyStorageApplet.CLA_KEYSTORAGEAPPLET,
-                insCode, 0, 0, data);
+                insCode, 0, 0, data, MAX_RESPONSE_SIZE);
         return checkError(io.transmitCommand(apdu));
     }
     
     private ResponseAPDU sendInstruction(int insCode, byte[] data, int offset, int length) {
         CommandAPDU apdu = new CommandAPDU(KeyStorageApplet.CLA_KEYSTORAGEAPPLET,
-                insCode, 0, 0, data, offset, length);
+                insCode, 0, 0, data, offset, length, MAX_RESPONSE_SIZE);
         return checkError(io.transmitCommand(apdu));
     }
     
-    public RSAPublicKey getPublicKey() throws ClientException {
+    public RSAKeyParameters getPublicKey() throws ClientException {
         byte[] data = sendInstruction(KeyStorageApplet.INS_GETPUBKEY).getData();
         if (data.length < 2) {
             throw new ClientException("Invalid response length!");
@@ -130,7 +135,7 @@ public class KeyStorageClient {
         if (data.length < modulusOffset + modulusLength + 2) {
             throw new ClientException("Invalid response length!");
         }
-        BigInteger modulus = new BigInteger(Arrays.copyOfRange(data,
+        BigInteger modulus = new BigInteger(1, Arrays.copyOfRange(data,
                 modulusOffset, modulusOffset + modulusLength));
         
         int exponentLengthOffset = modulusOffset + modulusLength;
@@ -141,29 +146,105 @@ public class KeyStorageClient {
         if (data.length < exponentOffset + exponentLength) {
             throw new ClientException("Invalid response length!");
         }
-        BigInteger exponent = new BigInteger(Arrays.copyOfRange(data,
+        BigInteger exponent = new BigInteger(1, Arrays.copyOfRange(data,
                 exponentOffset, exponentOffset + exponentLength));
         
-        RSAPublicKeySpec spec = new RSAPublicKeySpec(modulus, exponent);
-        try {
-            return (RSAPublicKey)rsaKeyFactory.generatePublic(spec);
-        } catch (InvalidKeySpecException ex) {
-            throw new ClientException("Invalid RSA public key!", ex);
-        }
+        return new RSAKeyParameters(false, modulus, exponent);
     }
 
-    private class Session {
-        private final SecretKeySpec encKey;
-        private final SecretKeySpec authKey;
+    private boolean verifyCardSignature(RSAKeyParameters cardKey,
+            byte[] sigBytes, int sigOffset, int sigLength,
+            byte[] dataBytes, int dataOffset, int dataLength)
+    {
+        rsaSignature.init(false, cardKey);
+        rsaSignature.update(dataBytes, dataOffset, dataLength);
+        return rsaSignature.verifySignature(Arrays.copyOfRange(sigBytes, sigOffset, sigOffset + sigLength));
+    }
+    
+    public class Session {
+        private final KeyParameter encKey;
+        private final KeyParameter authKey;
         
         private int seqNum = 0;
+        private boolean closed = false;
+        private boolean authenticated = false;
         
-        public Session(byte[] encKey, byte[] authKey) {
-            this.encKey = new SecretKeySpec(encKey, "AES");
-            this.authKey = new SecretKeySpec(authKey, "HmacSHA256");
+        public Session(RSAKeyParameters cardKey) throws ClientException {
+            AsymmetricCipherKeyPair keyPair = ecKeyGenerator.generateKeyPair();
+            ECPublicKeyParameters pub = (ECPublicKeyParameters)keyPair.getPublic();
+            byte[] pubData = pub.getQ().getEncoded(false);
+            byte[] requestData = new byte[2 + pubData.length];
+            if (pubData.length > Short.MAX_VALUE) {
+                throw new ClientException("Handshake public data too large!");
+            }
+            requestData[0] = (byte)(pubData.length & 0xFF);
+            requestData[1] = (byte)((pubData.length >> 8) & 0xFF);
+            System.arraycopy(pubData, 0, requestData, 2, pubData.length);
+
+            ResponseAPDU response = sendInstruction(KeyStorageApplet.INS_HANDSHAKE, requestData);
+            byte[] res = response.getBytes();
+            int resLength = response.getNr();
+            if (resLength < 2) {
+                throw new ClientException("Invalid response length!");
+            }
+            int sigLength = (res[0] & 0xFF) | ((res[1] & 0xFF) << 8);
+
+            int offset = 2;
+            if (!verifyCardSignature(cardKey,
+                    res, offset, sigLength,
+                    res, offset + sigLength, resLength - offset - sigLength)) {
+                throw new ClientException("Invalid signature!");
+            }
+            offset += sigLength;
+
+            if (resLength - offset < requestData.length) {
+                throw new ClientException("Invalid response length!");
+            }
+            if (!Arrays.equals(Arrays.copyOfRange(res, offset, offset + requestData.length), requestData)) {
+                throw new ClientException("Invalid response data!");
+            }
+            offset += requestData.length;
+
+            if (resLength - offset < 2) {
+                throw new ClientException("Invalid response length!");
+            }
+            int cardPubDataLength = (res[offset] & 0xFF) | ((res[offset + 1] & 0xFF) << 8);
+            offset += 2;
+
+            if (resLength - offset < cardPubDataLength) {
+                throw new ClientException("Invalid response length!");
+            }
+            ECPoint cardPubPoint = ecParams.getCurve().decodePoint(Arrays.copyOfRange(res, offset, offset + cardPubDataLength));
+            ECPublicKeyParameters cardPub = new ECPublicKeyParameters(cardPubPoint, ecParams);
+
+            ecdh.init(keyPair.getPrivate());
+            byte[] sharedSecret = ecdh.calculateAgreement(cardPub).toByteArray();
+
+            final int EC_BYTES = KeyStorageApplet.EC_BITS / 8;
+            if (sharedSecret.length > EC_BYTES) {
+                sharedSecret = Arrays.copyOfRange(sharedSecret,
+                        sharedSecret.length - EC_BYTES, sharedSecret.length);
+            }
+
+            byte[] sessionMasterKey = new byte[sha1.getDigestSize()];
+            sha1.update(sharedSecret, 0, sharedSecret.length); 
+            sha1.doFinal(sessionMasterKey, 0);
+            KeyParameter hmacKey = new KeyParameter(sessionMasterKey);
+            hmac256.init(hmacKey);
+
+            byte[] encKey = new byte[hmac256.getMacSize()];
+            hmac256.update(KeyStorageApplet.KEY_LABEL_ENC, 0, KeyStorageApplet.KEY_LABEL_ENC.length);
+            hmac256.doFinal(encKey, 0);
+
+            byte[] authKey = new byte[hmac256.getMacSize()];
+            hmac256.update(KeyStorageApplet.KEY_LABEL_AUTH, 0, KeyStorageApplet.KEY_LABEL_AUTH.length);
+            hmac256.doFinal(encKey, 0);
+
+            this.encKey = new KeyParameter(encKey);
+            this.authKey = new KeyParameter(authKey);
         }
         
-        public byte[] wrapData(byte[] data) throws ClientException {
+        private byte[] wrapData(byte[] data) throws ClientException {
             int seqNumOffset = KeyStorageApplet.MAC_LENGTH;
             int ivOffset = seqNumOffset + KeyStorageApplet.SEQNUM_LENGTH;
             int dataOffset = ivOffset + KeyStorageApplet.IV_LENGTH;
@@ -173,45 +254,40 @@ public class KeyStorageClient {
                     KeyStorageApplet.SEQNUM_LENGTH +
                     KeyStorageApplet.IV_LENGTH +
                     data.length];
-            try {
-                aescbc.init(Cipher.ENCRYPT_MODE, encKey);
-                aescbc.doFinal(data, 0, data.length, res, dataOffset);
-            } catch(GeneralSecurityException ex) {
-                throw new ClientException("Encryption error!", ex);
+            byte[] iv = new byte[16];
+            random.nextBytes(iv);
+            
+            aesCbc.init(true, new ParametersWithIV(encKey, iv));
+            
+            int blockSize = aesCbc.getBlockSize();
+            for (int off = 0; off < data.length; off += blockSize) {
+                aesCbc.processBlock(data, off, res, dataOffset + off);
             }
             
-            System.arraycopy(aescbc.getIV(), 0, res, ivOffset, KeyStorageApplet.IV_LENGTH);
+            System.arraycopy(iv, 0, res, ivOffset, KeyStorageApplet.IV_LENGTH);
             res[seqNumOffset] = (byte)(seqNum & 0xFF);
             res[seqNumOffset + 1] = (byte)((seqNum >> 8) & 0xFF);
             
             seqNum++;
             
-            try {
-                hmac256.init(authKey);
-                hmac256.update(res, seqNumOffset,
-                        KeyStorageApplet.SEQNUM_LENGTH +
-                        KeyStorageApplet.IV_LENGTH +
-                        data.length);
-                hmac256.doFinal(res, 0);
-            } catch(GeneralSecurityException ex) {
-                throw new ClientException("HMAC error!", ex);
-            }
+            hmac256.init(authKey);
+            hmac256.update(res, seqNumOffset,
+                    KeyStorageApplet.SEQNUM_LENGTH +
+                    KeyStorageApplet.IV_LENGTH +
+                    data.length);
+            hmac256.doFinal(res, 0);
             return res;
         }
 
-        public byte[] unwrapData(byte[] data) throws ClientException {
+        private byte[] unwrapData(byte[] data) throws ClientException {
             int seqNumOffset = KeyStorageApplet.MAC_LENGTH;
             int ivOffset = seqNumOffset + KeyStorageApplet.SEQNUM_LENGTH;
             int dataOffset = ivOffset + KeyStorageApplet.IV_LENGTH;
             
             byte[] mac = new byte[KeyStorageApplet.MAC_LENGTH];
-            try {
-                hmac256.init(authKey);
-                hmac256.update(data, seqNumOffset, data.length - seqNumOffset);
-                hmac256.doFinal(mac, 0);
-            } catch(GeneralSecurityException ex) {
-                throw new ClientException("HMAC error!", ex);
-            }
+            hmac256.init(authKey);
+            hmac256.update(data, seqNumOffset, data.length - seqNumOffset);
+            hmac256.doFinal(mac, 0);
             if (!Arrays.equals(mac, Arrays.copyOf(data, KeyStorageApplet.MAC_LENGTH))) {
                 throw new ClientException("Integrity check failed!");
             }
@@ -221,169 +297,155 @@ public class KeyStorageClient {
                 throw new ClientException("Sequential number check failed!");
             }
             
-            IvParameterSpec ivSpec = new IvParameterSpec(data, ivOffset, KeyStorageApplet.IV_LENGTH);
-            try {
-                aescbc.init(Cipher.ENCRYPT_MODE, encKey, ivSpec);
-                return aescbc.doFinal(data, dataOffset, data.length - dataOffset);
-            } catch(GeneralSecurityException ex) {
-                throw new ClientException("Encryption error!", ex);
-            } finally {
-                seqNum++;
+            byte[] res = new byte[data.length - dataOffset];
+            aesCbc.init(false, new ParametersWithIV(encKey, data, ivOffset, KeyStorageApplet.IV_LENGTH));
+            
+            int blockSize = aesCbc.getBlockSize();
+            for (int off = 0; off < data.length; off += blockSize) {
+                aesCbc.processBlock(data, off, res, dataOffset + off);
             }
-        }
-    }
-    
-    private static int getBytes(BigInteger x, byte[] dest, int offset, int bytes) {
-        byte[] repr = x.toByteArray();
-        System.arraycopy(repr, 0, dest, Math.max(bytes - repr.length, 0),
-                Math.min(repr.length, bytes));
-        return offset + bytes;
-    }
-    
-    private static byte[] encodeECPoint(ECPoint pt, int bits) {
-        int bytes = bits / 8 + (bits % 8 != 0 ? 1 : 0);
-        BigInteger x = pt.getAffineX();
-        BigInteger y = pt.getAffineY();
-        byte[] res = new byte[1 + 2 * bytes];
-        
-        /* ANSI X9.62 encoding (uncompressed): */
-        res[0] = (byte)0x04;
-        int offset = 1;
-        offset = getBytes(x, res, offset, bytes);
-        getBytes(y, res, offset, bytes);
-        return res;
-    }
-    
-    private static ECPoint decodeECPoint(byte[] data, int offset, int length, int bits) throws ClientException {
-        int bytes = bits / 8 + (bits % 8 != 0 ? 1 : 0);
-        if (length < 1 + 2 * bytes) {
-            throw new ClientException("Invalid response length!");
-        }
-        if (data[offset] != 0x04) {
-            throw new ClientException("Invalid EC point format!");
-        }
-        offset += 1;
-        
-        BigInteger x = new BigInteger(1, Arrays.copyOfRange(data, offset, bytes));
-        offset += bytes;
-        BigInteger y = new BigInteger(1, Arrays.copyOfRange(data, offset, bytes));
-        offset += bytes;
-        return new ECPoint(x, y);
-    }
-    
-    private boolean verifyCardSignature(RSAPublicKey cardKey, byte[] sigBytes, int sigOffset,
-            byte[] dataBytes, int dataOffset) throws GeneralSecurityException
-    {
-        rsaPkcs1Signature.initVerify(cardKey);
-        return rsaPkcs1Signature.verify(sigBytes, sigOffset, 20);
-    }
-    
-    private Session openSession(RSAPublicKey cardKey) throws ClientException
-    {
-        KeyPair keyPair = ecKeyGenerator.generateKeyPair();
-        ECPublicKey pub = (ECPublicKey)keyPair.getPublic();
-        byte[] pubData = encodeECPoint(pub.getW(), KeyStorageApplet.EC_BITS);
-        byte[] requestData = new byte[2 + pubData.length];
-        if (pubData.length > Short.MAX_VALUE) {
-            throw new ClientException("Handshake public data too large!");
-        }
-        requestData[0] = (byte)(pubData.length & 0xFF);
-        requestData[1] = (byte)((pubData.length >> 8) & 0xFF);
-        System.arraycopy(pubData, 0, requestData, 2, pubData.length);
-        
-        ResponseAPDU response = sendInstruction(KeyStorageApplet.INS_HANDSHAKE, requestData);
-        byte[] res = response.getBytes();
-        if (res.length < 2) {
-            throw new ClientException("Invalid response length!");
-        }
-        int sigLength = (res[0] & 0xFF) | ((res[1] & 0xFF) << 8);
-        
-        int offset = 2;
-        try {
-            if (!verifyCardSignature(cardKey, res, offset, res, offset + sigLength)) {
-                throw new ClientException("Invalid signature!");
-            }
-        } catch (GeneralSecurityException ex) {
-            throw new ClientException("Signature verification error!", ex);
-        }
-        offset += sigLength;
-        
-        if (res.length - offset < requestData.length) {
-            throw new ClientException("Invalid response length!");
-        }
-        if (!Arrays.equals(Arrays.copyOfRange(res, offset, requestData.length), requestData)) {
-            throw new ClientException("Invalid response data!");
-        }
-        offset += requestData.length;
-        
-        if (res.length - offset < 2) {
-            throw new ClientException("Invalid response length!");
-        }
-        int cardPubDataLength = (res[offset] & 0xFF) | ((res[offset + 1] & 0xFF) << 8);
-        offset += 2;
-        
-        if (res.length - offset < cardPubDataLength) {
-            throw new ClientException("Invalid response length!");
-        }
-        ECPoint cardPubPoint = decodeECPoint(res, offset, cardPubDataLength, KeyStorageApplet.EC_BITS);
-        ECPublicKeySpec keySpec = new ECPublicKeySpec(cardPubPoint, ecParams);
-        try {
-            ECPublicKey cardPub = (ECPublicKey)ecKeyFactory.generatePublic(keySpec);
-            ecdh.init(keyPair.getPrivate());
-            ecdh.doPhase(cardPub, true);
-        } catch (GeneralSecurityException ex) {
-            throw new ClientException("ECDH key exchange failed!", ex);
-        }
-        byte[] sessionMasterKey = ecdh.generateSecret();
-        SecretKeySpec hmacKey = new SecretKeySpec(sessionMasterKey, "HmacSHA256");
-        try {
-            hmac256.init(hmacKey);
-        } catch (InvalidKeyException ex) {
-            throw new ClientException("Invalid HMAC key!", ex);
+            seqNum++;
+            return res;
         }
         
-        byte[] encKey = hmac256.doFinal(KeyStorageApplet.KEY_LABEL_ENC);
-        byte[] authKey = hmac256.doFinal(KeyStorageApplet.KEY_LABEL_AUTH);
-        return new Session(encKey, authKey);
-    }
-    
-    private byte[] sendCommand(Session session, byte cmd, byte[] data) throws ClientException {
-        int payloadSize = 1 + 2 + data.length;
-        
-        /* pad payload size to a multiple of AES block length: */
-        int extra = payloadSize % KeyStorageApplet.BLOCK_LENGTH;
-        if (extra != 0) {
-            payloadSize += KeyStorageApplet.BLOCK_LENGTH - extra;
-        }
-        if (payloadSize > Short.MAX_VALUE) {
-            throw new ClientException("Payload size too large!");
-        }
-        
-        byte[] payload = new byte[payloadSize];
-        payload[0] = cmd;
-        payload[1] = (byte)(payloadSize & 0xFF);
-        payload[2] = (byte)((payloadSize >> 8) & 0xFF);
-        System.arraycopy(data, 0, payload, 3, data.length);
+        private byte[] sendCommand(byte cmd, byte[] data) throws ClientException {
+            int payloadSize = 1 + 2 + data.length;
 
-        ResponseAPDU apdu = sendInstruction(KeyStorageApplet.INS_COMMAND, session.wrapData(payload));
-        byte[] res = session.unwrapData(apdu.getData());
-        if (res.length < 2) {
-            throw new ClientException("Invalid response length!");
+            /* pad payload size to a multiple of AES block length: */
+            int extra = payloadSize % KeyStorageApplet.BLOCK_LENGTH;
+            if (extra != 0) {
+                payloadSize += KeyStorageApplet.BLOCK_LENGTH - extra;
+            }
+            if (payloadSize > Short.MAX_VALUE) {
+                throw new ClientException("Payload size too large!");
+            }
+
+            byte[] payload = new byte[payloadSize];
+            payload[0] = cmd;
+            payload[1] = (byte)(payloadSize & 0xFF);
+            payload[2] = (byte)((payloadSize >> 8) & 0xFF);
+            System.arraycopy(data, 0, payload, 3, data.length);
+
+            ResponseAPDU apdu = sendInstruction(KeyStorageApplet.INS_COMMAND, wrapData(payload));
+            byte[] res = unwrapData(apdu.getData());
+            if (res.length < 2) {
+                throw new ClientException("Invalid response length!");
+            }
+            int responseLength = (res[0] & 0xFF) | ((res[1] & 0xFF) << 8);
+            if (res.length < 2 + responseLength) {
+                throw new ClientException("Invalid response length!");
+            }
+            return Arrays.copyOfRange(res, 2, responseLength);
         }
-        int responseLength = (res[0] & 0xFF) | ((res[1] & 0xFF) << 8);
-        if (res.length < 2 + responseLength) {
-            throw new ClientException("Invalid response length!");
+
+        private void checkAuthenticated() throws ClientException {
+            if (!authenticated) {
+                throw new IllegalStateException("Session not authenticated!");
+            }
         }
-        return Arrays.copyOfRange(res, 2, responseLength);
+        
+        private void checkNotClosed() throws ClientException {
+            if (closed) {
+                throw new IllegalStateException("Session closed!");
+            }
+        }
+        
+        public void close() throws ClientException {
+            checkNotClosed();
+            
+            try {
+                sendCommand(KeyStorageApplet.CMD_CLOSE, new byte[0]);
+            } catch (ClientException ex) {
+                /* ignore exception on closing */
+            } finally {
+                closed = true;
+            }
+        }
+
+        public void authenticate(String password) throws ClientException {
+            checkNotClosed();
+            
+            try {
+                sendCommand(KeyStorageApplet.CMD_AUTH, encodePassword(password));
+            } catch (ISOException ex) {
+                if (ex.getReason() == ISO7816.SW_WRONG_DATA) {
+                    throw new ClientException("Invalid password!", ex);
+                }
+                throw ex;
+            }
+            authenticated = true;
+        }
+    
+        public void changeMasterPassword(String newPassword) throws ClientException {
+            checkNotClosed();
+            checkAuthenticated();
+            
+            sendCommand(KeyStorageApplet.CMD_CHANGEPW, encodePassword(newPassword));
+        }
+        
+        public byte[] generateKey(int keyLength) throws ClientException {
+            checkNotClosed();
+            checkAuthenticated();
+            
+            if (keyLength <= 0) {
+                throw new ClientException("Key size must be > 0!");
+            }
+            if (keyLength > Byte.MAX_VALUE) {
+                throw new ClientException("Key size must be less than Byte.MAX_VALUE!");
+            }
+            
+            return sendCommand(KeyStorageApplet.CMD_GENKEY, new byte[] { (byte)keyLength });
+        }
+        
+        public void storeKey(byte[] uuid, byte[] key) throws ClientException {
+            checkNotClosed();
+            checkAuthenticated();
+            
+            if (uuid.length != 40) {
+                throw new IllegalArgumentException("uuid");
+            }
+            
+            if (key.length == 0) {
+                throw new ClientException("Key size must be > 0!");
+            }
+            if (key.length > Byte.MAX_VALUE) {
+                throw new ClientException("Key size must be less than Byte.MAX_VALUE!");
+            }
+            
+            byte[] reqData = new byte[40 + 1 + key.length];
+            System.arraycopy(uuid, 0, reqData, 0, 40);
+            int offset = 40;
+            reqData[offset++] = (byte)key.length;
+            System.arraycopy(key, 0, reqData, offset, key.length);
+            
+            sendCommand(KeyStorageApplet.CMD_STOREKEY, reqData);
+        }
+        
+        public byte[] loadKey(byte[] uuid) throws ClientException {
+            checkNotClosed();
+            checkAuthenticated();
+            
+            if (uuid.length != 40) {
+                throw new IllegalArgumentException("uuid");
+            }
+            
+            return sendCommand(KeyStorageApplet.CMD_LOADKEY, uuid);
+        }
+        
+        public void deleteKey(byte[] uuid) throws ClientException {
+            checkNotClosed();
+            checkAuthenticated();
+            
+            if (uuid.length != 40) {
+                throw new IllegalArgumentException("uuid");
+            }
+            
+            sendCommand(KeyStorageApplet.CMD_DELKEY, uuid);
+        }
     }
     
-    private void closeSession(Session session) {
-        try {
-            sendCommand(session, KeyStorageApplet.CMD_CLOSE, new byte[0]);
-        } catch (ClientException ex) {
-            /* ignore exception on closing */
-        }
+    public Session openSession(RSAKeyParameters cardKey) throws ClientException
+    {
+        return new Session(cardKey);
     }
-    
-    /* TODO... */
 }

@@ -7,6 +7,7 @@ package applets;
 
 import javacard.framework.*;
 import javacard.security.*;
+import javacardx.apdu.*;
 import javacardx.crypto.Cipher;
 
 /**
@@ -14,7 +15,7 @@ import javacardx.crypto.Cipher;
  * @author Manoja Kumar Das
  * @author Ondrej Mosnacek &lt;omosnacek@gmail.com&gt;
  */
-public class KeyStorageApplet extends Applet {
+public class KeyStorageApplet extends Applet implements ExtendedLength {
     
     public static final byte[] AID = new byte[] {
         (byte)0x4a, (byte)0x43, (byte)0x4b, (byte)0x65, (byte)0x79, (byte)0x53,
@@ -38,6 +39,7 @@ public class KeyStorageApplet extends Applet {
     public static final short RSA_BITS = KeyBuilder.LENGTH_RSA_2048;
     public static final short EC_BITS = KeyBuilder.LENGTH_EC_FP_192;
     
+    public static final short SESSION_KEY_LENGTH = 20;
     public static final byte[] KEY_LABEL_ENC = new byte[] { (byte)0xEE };
     public static final byte[] KEY_LABEL_AUTH = new byte[] { (byte)0xAA };
     
@@ -143,6 +145,7 @@ public class KeyStorageApplet extends Applet {
         signingKeyPair.genKeyPair();
         
         signature = Signature.getInstance(Signature.ALG_RSA_SHA_PKCS1, false);
+        signature.init(signingKeyPair.getPrivate(), Signature.MODE_SIGN);
         
         /* prepare an ANSI X9.62 uncompressed EC point representation for G: */
         byte[] gBuf = new byte[(short)1 + (short)EC_FP_G_x.length + (short)EC_FP_G_y.length];
@@ -236,24 +239,27 @@ public class KeyStorageApplet extends Applet {
         byte[]    apdubuf = apdu.getBuffer();
         short     dataLen = apdu.getIncomingLength();
         
-        short      pubdataLen = (short)(apdubuf[ISO7816.OFFSET_CDATA] & 0xFF);
-        pubdataLen |= (short)((short)(apdubuf[ISO7816.OFFSET_CDATA + 1] & 0xFF) << 8);
-        short pubDataOffset = (short) (ISO7816.OFFSET_CDATA + 2);
+        short dataOffset = apdu.getOffsetCdata();
+        
+        short      pubdataLen = (short)(apdubuf[dataOffset] & 0xFF);
+        pubdataLen |= (short)((short)(apdubuf[dataOffset + 1] & 0xFF) << 8);
+        short pubDataOffset = (short) (dataOffset + 2);
         
         dhKeyPair.genKeyPair();
+        sessKeyAgreement.init(dhPrivKey);
         
-        byte[] sessKey = new byte[EC_BITS/8];
+        byte[] sessKey = new byte[SESSION_KEY_LENGTH];
         short sessKeyLen = sessKeyAgreement.generateSecret(apdubuf, pubDataOffset, pubdataLen, sessKey, (short)0);
         /* process the session key... */
         
         short sigLength = signature.getLength();
-        short sigLengthOffset = ISO7816.OFFSET_CDATA;
+        short sigLengthOffset = dataOffset;
         short sigOffset = (short)(sigLengthOffset + 2);
         
         short pdLengthOffset = (short)(sigOffset + sigLength);
         short pdOffset = (short)(pdLengthOffset + 2);
         
-        Util.arrayCopy(apdubuf, ISO7816.OFFSET_CDATA, apdubuf, pdLengthOffset, (short)(2 + pubdataLen));
+        Util.arrayCopy(apdubuf, dataOffset, apdubuf, pdLengthOffset, (short)(2 + pubdataLen));
         
         short cardpdLengthOffset = (short)(pdOffset + pubdataLen);
         short cardpdOffset = (short)(cardpdLengthOffset + 2);
@@ -286,9 +292,13 @@ public class KeyStorageApplet extends Applet {
         
         short size;
         switch(apduBuffer[ISO7816.OFFSET_INS]) {
+            case INS_GETPUBKEY:
+                size = fillPubKey(apduBuffer, apdu.getOffsetCdata());
+                apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
+                break;
             case INS_HANDSHAKE:
                 size = dhHandshake(apdu);
-                apdu.setOutgoingAndSend(ISO7816.OFFSET_CDATA, size);
+                apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
                 break;
             /* TODO: ... */
             default:

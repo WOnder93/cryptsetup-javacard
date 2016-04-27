@@ -6,6 +6,7 @@
 package jckeystorage;
 
 import java.security.GeneralSecurityException;
+import org.bouncycastle.crypto.params.RSAKeyParameters;
 
 /**
  * The main class.
@@ -16,7 +17,7 @@ public class JCKeyStorage {
     /**
      * @param args the command line arguments
      */
-    public static void main(String[] args) {
+    public static void main(String[] args) throws ClientException {
         KeyStorageClient client;
         try {
             client = new KeyStorageClient(SimulatorSmartCardIO.INSTANCE);
@@ -27,9 +28,11 @@ public class JCKeyStorage {
         }
         client.installApplet("test");
         client.selectApplet();
-        //System.out.println(client.getPublicKey());
         
-        //client.sendCommand((byte)0, null);
+        RSAKeyParameters publicKey = client.getPublicKey();
+        KeyStorageClient.Session session = client.openSession(publicKey);
+        session.authenticate("test");
+        session.close();
     }
     
 }
