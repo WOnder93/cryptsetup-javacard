@@ -250,8 +250,17 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         
         byte[] sessKey = new byte[SESSION_KEY_LENGTH];
         short sessKeyLen = sessKeyAgreement.generateSecret(apdubuf, pubDataOffset, pubdataLen, sessKey, (short)0);
-        /* process the session key... */
         
+        macKey.setKey(sessKey, (short)0, sessKeyLen);
+        mac.init(macKey, Signature.MODE_SIGN);
+        
+        byte[] keyBuf = new byte[mac.getLength()];
+        mac.sign(KEY_LABEL_ENC, (short)0, (short)KEY_LABEL_ENC.length, keyBuf, (short)0);
+        cipherKey.setKey(keyBuf, (short)0);
+       
+        mac.sign(KEY_LABEL_AUTH, (short)0, (short)KEY_LABEL_AUTH.length, keyBuf, (short)0);
+        macKey.setKey(keyBuf, (short)0, (short)keyBuf.length);
+
         short sigLength = signature.getLength();
         short sigLengthOffset = dataOffset;
         short sigOffset = (short)(sigLengthOffset + 2);
@@ -278,6 +287,40 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         return (short)((short)(cardpdOffset - sigLengthOffset) + cardpdLength);
     }
     
+    short InsCommand(APDU apdu) {
+		byte[]    apdubuf = apdu.getBuffer();
+      		short     dataLen = apdu.setIncomingAndReceive();
+          
+                short dataOffset = apdu.getOffsetCdata() ;
+                short seqNumOffset = (short)(dataOffset + MAC_LENGTH);
+                short ivOffset = (short)(seqNumOffset + SEQNUM_LENGTH);
+                short payloadOffset = (short)(ivOffset + IV_LENGTH);
+        ////    mac.verify
+        mac.init(macKey, Signature.MODE_VERIFY);
+	if (!mac.verify(apdubuf, seqNumOffset, (short)(dataLen - seqNumOffset), apdubuf, dataOffset, MAC_LENGTH)) {
+            ISOException.throwIt(ISO7816.SW_WRONG_DATA);
+        }
+        
+        short claimedSeqNum = (short)((short)(apdubuf[seqNumOffset] & 0xFF) |
+                ((short)(apdubuf[seqNumOffset + 1] & 0xFF) << 8));
+        
+        if (claimedSeqNum != seqNum) {
+            ISOException.throwIt(ISO7816.SW_WRONG_DATA);
+        }
+        
+        // INIT CIPHERS WITH NEW KEY
+        cipher.init(cipherKey, Cipher.MODE_DECRYPT);        
+        cipher.doFinal(apdubuf, (short)(ISO7816.OFFSET_CDATA + 50), (short) (dataLen-50), apdubuf, (short)(ISO7816.OFFSET_CDATA + 50));
+               
+        short payloadLength = processCommand (apdubuf, payloadOffset);
+        short extra = (short)(payloadLength % 16);
+        if (extra != 0) {
+            payloadLength = (short)(payloadLength + (short)(16 - extra));
+        }
+        /*  Not completed ....... */  
+        return (short)((short)(payloadOffset + payloadLength) - dataOffset);
+    }
+
     public final void process(APDU apdu) throws ISOException {
         // ignore the applet select command dispached to the process
         if (selectingApplet())
@@ -299,6 +342,9 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             case INS_HANDSHAKE:
                 size = dhHandshake(apdu);
                 apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
+            case INS_COMMAND:
+                size = InsCommand(apdu);
+                apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
                 break;
             /* TODO: ... */
             default:
@@ -307,10 +353,65 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         }
     }
     
-    private short processCommand(byte[] buffer, short offset, short length) {
+    private short commandAuth(byte[] buffer, short offset, short length) {
+        // TODO
+        return -1;
+    }
+
+    private short commandChangePw(byte[] buffer, short offset, short length) {
+        // TODO
+        return -1;
+    }
+
+    private short commandGenKey(byte[] buffer, short offset, short length) {
+        // TODO
+        return -1;
+    }
+
+    private short commandStoreKey(byte[] buffer, short offset, short length) {
+        // TODO
+        return -1;
+    }
+
+    private short commandLoadKey(byte[] buffer, short offset, short length) {
+        // TODO
+        return -1;
+    }
+
+    private short commandDelKey(byte[] buffer, short offset, short length) {
+        // TODO
+        return -1;
+    }
+
+    private short commandClose(byte[] buffer, short offset, short length) {
+        // TODO
+        return -1;
+    }
+
+    private short processCommand(byte[] buffer, short offset ) {
         /* TODO */
         /* first byte is the command code; response data should be written
          * to the same buffer and its size returned */
-        return -1;
+        byte command = buffer[offset];
+        short commandLen = (short)((short)(buffer[offset +1] & 0xFF) |
+                ((short)(buffer[offset +2] & 0xFF) << 8));
+        
+        short dataOffset = (short)(offset + 3);
+	switch(command) {
+         
+	 	case CMD_AUTH       : commandLen = commandAuth(buffer, dataOffset, commandLen); break;
+                case CMD_CHANGEPW   : commandLen = commandChangePw(buffer, dataOffset, commandLen); break;
+                case CMD_GENKEY     : commandLen = commandGenKey(buffer, dataOffset, commandLen); break;
+		case CMD_STOREKEY   : commandLen = commandStoreKey(buffer, dataOffset, commandLen); break;
+                case CMD_LOADKEY    : commandLen = commandLoadKey(buffer, dataOffset, commandLen); break;
+                case CMD_DELKEY     : commandLen = commandDelKey(buffer, dataOffset, commandLen); break;
+		case CMD_CLOSE      : commandLen = commandClose(buffer, dataOffset, commandLen); break;
+	
+            default:
+                ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
+                break;
+        }
+                
+        return commandLen;
     }
 }
