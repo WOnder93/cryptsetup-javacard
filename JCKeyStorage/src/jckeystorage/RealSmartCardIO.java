@@ -21,15 +21,26 @@ import javax.smartcardio.TerminalFactory;
  * @author Ondrej Mosnacek &lt;omosnacek@gmail.com&gt;
  */
 public final class RealSmartCardIO implements SmartCardIO {
-    
+
     CardChannel channel;
     
-    public RealSmartCardIO() throws CardException {
+    public RealSmartCardIO(CardTerminal terminal) throws CardException {
+        Card card = terminal.connect("*");
+        card.getATR();
+        channel = card.getBasicChannel();
+    }
+    
+    public static RealSmartCardIO openTerminal(String terminalName) throws CardException {
+        TerminalFactory factory = TerminalFactory.getDefault();
+        CardTerminal terminal = factory.terminals().getTerminal(terminalName);
+        return new RealSmartCardIO(terminal);
+    }
+    
+    public static RealSmartCardIO openFirstTerminal() throws CardException {
         TerminalFactory factory = TerminalFactory.getDefault();
         List<CardTerminal> terminals = factory.terminals().list();
         CardTerminal terminal = terminals.get(0);
-        Card card = terminal.connect("*");
-        channel = card.getBasicChannel();
+        return new RealSmartCardIO(terminal);
     }
 
     @Override
@@ -41,8 +52,7 @@ public final class RealSmartCardIO implements SmartCardIO {
     public boolean selectApplet(byte[] aidArray) {
         ResponseAPDU res;
         try {
-            res = channel.transmit(new CommandAPDU(
-                    ISO7816.CLA_ISO7816, ISO7816.INS_SELECT, 0, 0, aidArray));
+            res = channel.transmit(new CommandAPDU(0x00, 0xA4, 0x04, 0x00, aidArray));
         } catch (CardException ex) {
             return false;
         }

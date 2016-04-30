@@ -7,6 +7,7 @@ package jckeystorage;
 
 import applets.KeyStorageApplet;
 import java.math.BigInteger;
+import java.nio.CharBuffer;
 import java.nio.charset.Charset;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
@@ -83,13 +84,17 @@ public class KeyStorageClient {
         aesCbc = new CBCBlockCipher(new AESEngine());
     }
     
-    private static byte[] encodePassword(String password) {
-        return Charset.forName("UTF-8").encode(password).array();
+    private static byte[] encodePassword(char[] password) {
+        return Charset.forName("UTF-8").encode(CharBuffer.wrap(password)).array();
     }
     
-    public final void installApplet(String masterPassword) {
+    public final void installApplet(char[] masterPassword) {
         byte[] pwdBytes = encodePassword(masterPassword);
-        io.installApplet(KeyStorageApplet.AID, KeyStorageApplet.class, pwdBytes);
+        try {
+            io.installApplet(KeyStorageApplet.AID, KeyStorageApplet.class, pwdBytes);
+        } finally {
+            Arrays.fill(pwdBytes, (byte)0);
+        }
     }
     
     public final boolean selectApplet() {
@@ -362,25 +367,33 @@ public class KeyStorageClient {
             }
         }
 
-        public void authenticate(String password) throws ClientException {
+        public void authenticate(char[] password) throws ClientException {
             checkNotClosed();
             
+            byte[] encPassword = encodePassword(password);
             try {
-                sendCommand(KeyStorageApplet.CMD_AUTH, encodePassword(password));
+                sendCommand(KeyStorageApplet.CMD_AUTH, encPassword);
             } catch (ISOException ex) {
                 if (ex.getReason() == ISO7816.SW_WRONG_DATA) {
                     throw new ClientException("Invalid password!", ex);
                 }
                 throw ex;
+            } finally {
+                Arrays.fill(encPassword, (byte)0);
             }
             authenticated = true;
         }
     
-        public void changeMasterPassword(String newPassword) throws ClientException {
+        public void changeMasterPassword(char[] newPassword) throws ClientException {
             checkNotClosed();
             checkAuthenticated();
             
-            sendCommand(KeyStorageApplet.CMD_CHANGEPW, encodePassword(newPassword));
+            byte[] encPassword = encodePassword(newPassword);
+            try {
+                sendCommand(KeyStorageApplet.CMD_CHANGEPW, encPassword);
+            } finally {
+                Arrays.fill(encPassword, (byte)0);
+            }
         }
         
         public byte[] generateKey(int keyLength) throws ClientException {
