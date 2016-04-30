@@ -51,6 +51,8 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     public static final byte MAX_PW_TRIES = 5;
     public static final byte MAX_PW_LEN = 64;
     
+    public static final short MAX_KEY_SIZE = 128;
+    
     /* secp192r1, as per http://www.secg.org/sec2-v2.pdf */
     public static final byte[] EC_FP_P = new byte[] {
         (byte)0xFF, (byte)0xFF, (byte)0xFF, (byte)0xFF,
@@ -102,13 +104,11 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     };
     public static final short EC_FP_K = 1;
     
-    private enum State {
-        IDLE,
-        KEY_ESTABILISHED,
-        AUTHENTICATED,
-    };
+    private static final short STATE_IDLE = (short)0;
+    private static final short STATE_KEY_ESTABILISHED = (short)1;
+    private static final short STATE_AUTHENTICATED = (short)2;
     
-    private State state;
+    private short state;
 
     private final OwnerPIN masterPassword;
     
@@ -130,8 +130,24 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     
     /* TODO ... */
     
+    private static short readShort(byte[] buf, short offset) {
+        /* read high byte: */
+        short res = (short)(buf[(short)(offset + (short)1)] & (short)0xFF);
+        res <<= (short)8;
+        /* read low byte: */
+        res |= (short)(buf[offset] & (short)0xFF);
+        return res;
+    }
+    
+    private static void writeShort(byte[] buf, short offset, short value) {
+        buf[offset] = (byte)(value & (short)0xFF);
+        ++offset;
+        value >>= (short)8;
+        buf[offset] = (byte)(value & (short)0xFF);
+    }
+    
     private KeyStorageApplet(byte[] bArray, short bOffset, byte bLength) throws ISOException {
-        state = State.IDLE;
+        state = STATE_IDLE;
         
         masterPassword = new OwnerPIN(MAX_PW_TRIES, MAX_PW_LEN);
         if (bLength == 0) {
@@ -148,7 +164,10 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         signature.init(signingKeyPair.getPrivate(), Signature.MODE_SIGN);
         
         /* prepare an ANSI X9.62 uncompressed EC point representation for G: */
-        byte[] gBuf = new byte[(short)1 + (short)EC_FP_G_x.length + (short)EC_FP_G_y.length];
+        short gSize = (short)1;
+        gSize += (short)EC_FP_G_x.length;
+        gSize += (short)EC_FP_G_y.length;
+        byte[] gBuf = new byte[gSize];
         gBuf[0] = 0x04;
         short off = 1;
         off = Util.arrayCopy(EC_FP_G_x, (short)0, gBuf, off, (short)EC_FP_G_x.length);
@@ -185,7 +204,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     }
     
     public final boolean select() {
-        state = State.IDLE;
+        state = STATE_IDLE;
         seqNum = 0;
         /* TODO: ... */
         return true;
@@ -215,21 +234,19 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         RSAPublicKey pubKey = (RSAPublicKey)signingKeyPair.getPublic();
         
         short modSizeOffset = offset;
-        short modOffset = (short)(offset + 2);
+        short modOffset = (short)(offset + (short)2);
         
         short modSize = pubKey.getModulus(buffer, modOffset);
-        buffer[modSizeOffset] = (byte)(modSize & 0xFF);
-        buffer[modSizeOffset + 1] = (byte)((modSize >> 8) & 0xFF);
-        totalSize += 2;
+        writeShort(buffer, modSizeOffset, modSize);
+        totalSize += (short)2;
         totalSize += modSize;
         
         short expSizeOffset = (short)(modOffset + modSize);
-        short expOffset = (short)(expSizeOffset + 2);
+        short expOffset = (short)(expSizeOffset + (short)2);
         
         short expSize = pubKey.getExponent(buffer, expOffset);
-        buffer[expSizeOffset] = (byte)(expSize & 0xFF);
-        buffer[expSizeOffset + 1] = (byte)((expSize >> 8) & 0xFF);
-        totalSize += 2;
+        writeShort(buffer, expSizeOffset, expSize);
+        totalSize += (short)2;
         totalSize += expSize;
         
         return totalSize;
@@ -241,8 +258,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         
         short dataOffset = apdu.getOffsetCdata();
         
-        short      pubdataLen = (short)(apdubuf[dataOffset] & 0xFF);
-        pubdataLen |= (short)((short)(apdubuf[dataOffset + 1] & 0xFF) << 8);
+        short pubdataLen = readShort(apdubuf, dataOffset);
         short pubDataOffset = (short) (dataOffset + 2);
         
         dhKeyPair.genKeyPair();
@@ -263,26 +279,26 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
 
         short sigLength = signature.getLength();
         short sigLengthOffset = dataOffset;
-        short sigOffset = (short)(sigLengthOffset + 2);
+        short sigOffset = (short)(sigLengthOffset + (short)2);
         
         short pdLengthOffset = (short)(sigOffset + sigLength);
-        short pdOffset = (short)(pdLengthOffset + 2);
+        short pdOffset = (short)(pdLengthOffset + (short)2);
         
-        Util.arrayCopy(apdubuf, dataOffset, apdubuf, pdLengthOffset, (short)(2 + pubdataLen));
+        Util.arrayCopy(apdubuf, dataOffset, apdubuf, pdLengthOffset, (short)((short)2 + pubdataLen));
         
         short cardpdLengthOffset = (short)(pdOffset + pubdataLen);
-        short cardpdOffset = (short)(cardpdLengthOffset + 2);
+        short cardpdOffset = (short)(cardpdLengthOffset + (short)2);
         
         ECPublicKey pubKey = (ECPublicKey)dhKeyPair.getPublic();
         short cardpdLength = pubKey.getW(apdubuf, cardpdOffset);
-        apdubuf[cardpdLengthOffset] = (byte)(cardpdLength & 0xFF);
-        apdubuf[cardpdLengthOffset + 1] = (byte)((cardpdLength >> 8) & 0xFF);
+        writeShort(keyBuf, cardpdLengthOffset, cardpdLength);
         
-        signature.sign(apdubuf, pdLengthOffset,
-                (short)((short)((short)(2 + pubdataLen) + 2) + cardpdLength),
-                apdubuf, sigOffset);
-        apdubuf[sigLengthOffset] = (byte)(sigLength & 0xFF);
-        apdubuf[sigLengthOffset + 1] = (byte)((sigLength >> 8) & 0xFF);
+        short signedDataLength = (short)2;
+        signedDataLength += pubdataLen;
+        signedDataLength += (short)2;
+        signedDataLength += cardpdLength;
+        signature.sign(apdubuf, pdLengthOffset, signedDataLength, apdubuf, sigOffset);
+        writeShort(apdubuf, sigLengthOffset, sigLength);
         
         return (short)((short)(cardpdOffset - sigLengthOffset) + cardpdLength);
     }
@@ -301,21 +317,19 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         
-        short claimedSeqNum = (short)((short)(apdubuf[seqNumOffset] & 0xFF) |
-                ((short)(apdubuf[seqNumOffset + 1] & 0xFF) << 8));
-        
+        short claimedSeqNum = readShort(apdubuf, seqNumOffset);
         if (claimedSeqNum != seqNum) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         
         cipher.init(cipherKey, Cipher.MODE_DECRYPT);        
         cipher.doFinal(
-                apdubuf, payloadOffset, (short) (dataLen - payloadOffset),
+                apdubuf, payloadOffset, (short)(dataLen - payloadOffset),
                 apdubuf, payloadOffset);
                
-        short payloadLength = processCommand (apdubuf, payloadOffset);
+        short payloadLength = processCommand(apdubuf, payloadOffset);
         short extra = (short)(payloadLength % BLOCK_LENGTH);
-        if (extra != 0) {
+        if (extra != (short)0) {
             payloadLength = (short)(payloadLength + (short)(BLOCK_LENGTH - extra));
         }
         /*  Not completed ....... */  
@@ -337,12 +351,14 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         short size;
         switch(apduBuffer[ISO7816.OFFSET_INS]) {
             case INS_GETPUBKEY:
+                // TODO: verify states
                 size = fillPubKey(apduBuffer, apdu.getOffsetCdata());
                 apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
                 break;
             case INS_HANDSHAKE:
                 size = dhHandshake(apdu);
                 apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
+                break;
             case INS_COMMAND:
                 size = InsCommand(apdu);
                 apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
@@ -391,19 +407,17 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     private short processCommand(byte[] buffer, short offset ) {
         /* first byte is the command code; response data should be written
          * to the same buffer and its size returned */
-        byte command = buffer[offset];
-        short commandLen = (short)((short)(buffer[offset +1] & 0xFF) |
-                ((short)(buffer[offset +2] & 0xFF) << 8));
-        
-        short dataOffset = (short)(offset + 3);
+        byte command = buffer[offset++];
+        short commandLen = readShort(buffer, offset);
+        offset += 2;
 	switch(command) {
-            case CMD_AUTH       : commandLen = commandAuth(buffer, dataOffset, commandLen); break;
-            case CMD_CHANGEPW   : commandLen = commandChangePw(buffer, dataOffset, commandLen); break;
-            case CMD_GENKEY     : commandLen = commandGenKey(buffer, dataOffset, commandLen); break;
-            case CMD_STOREKEY   : commandLen = commandStoreKey(buffer, dataOffset, commandLen); break;
-            case CMD_LOADKEY    : commandLen = commandLoadKey(buffer, dataOffset, commandLen); break;
-            case CMD_DELKEY     : commandLen = commandDelKey(buffer, dataOffset, commandLen); break;
-            case CMD_CLOSE      : commandLen = commandClose(buffer, dataOffset, commandLen); break;
+            case CMD_AUTH       : commandLen = commandAuth(buffer, offset, commandLen); break;
+            case CMD_CHANGEPW   : commandLen = commandChangePw(buffer, offset, commandLen); break;
+            case CMD_GENKEY     : commandLen = commandGenKey(buffer, offset, commandLen); break;
+            case CMD_STOREKEY   : commandLen = commandStoreKey(buffer, offset, commandLen); break;
+            case CMD_LOADKEY    : commandLen = commandLoadKey(buffer, offset, commandLen); break;
+            case CMD_DELKEY     : commandLen = commandDelKey(buffer, offset, commandLen); break;
+            case CMD_CLOSE      : commandLen = commandClose(buffer, offset, commandLen); break;
             default:
                 ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
                 break;
