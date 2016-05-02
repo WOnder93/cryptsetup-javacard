@@ -8,9 +8,7 @@ package jckeystorage;
 import java.security.GeneralSecurityException;
 import org.bouncycastle.crypto.params.RSAKeyParameters;
 import org.junit.After;
-import org.junit.AfterClass;
 import org.junit.Before;
-import org.junit.BeforeClass;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
