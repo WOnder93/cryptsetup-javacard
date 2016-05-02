@@ -331,31 +331,4 @@ public class JCKeyStorage {
     public static void main(String[] args) {
         CommandLine.run(args);
     }
-    
-    public static void test() throws ClientException {
-        RealSmartCardIO io;
-        try {
-            io = RealSmartCardIO.openFirstTerminal();
-        } catch (CardException ex) {
-            System.err.println("ERROR: Unable to open terminal: " + ex);
-            System.exit(1);
-            return;
-        }
-
-        KeyStorageClient client;
-        try {
-            client = new KeyStorageClient(io);
-        } catch (GeneralSecurityException ex) {
-            System.err.printf("ERROR: Unable to initialize JC client: %s", ex);
-            System.exit(1);
-            return;
-        }
-        client.installApplet("test".toCharArray());
-        client.selectApplet();
-
-        RSAKeyParameters publicKey = client.getPublicKey();
-        KeyStorageClient.Session session = client.openSession(publicKey);
-        session.authenticate("test".toCharArray());
-        session.close();
-    }
 }
