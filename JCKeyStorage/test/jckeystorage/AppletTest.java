@@ -53,11 +53,14 @@ public class AppletTest {
         byte[] key = session.loadKey(UUID);
         assertArrayEquals(generatedKey, key);
         session.deleteKey(UUID);
+        
+        boolean failed = false;
         try {
             session.loadKey(UUID);
         } catch (Exception e) {
-            fail("Key not deleted!");
+            failed = true;
         }
+        assertEquals("Key not deleted!", true, failed);
         session.close();
     }
 }
