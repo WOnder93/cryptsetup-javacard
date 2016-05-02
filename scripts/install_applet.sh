@@ -27,15 +27,15 @@ APPLET_SOURCE="$APPLET_PATH/KeyStorageApplet.java"
 JCDK_PATH="$PROJECT_HOME/ext/java_card_kit-2_2_2"
 
 # Compile the class file:
-"$JAVA_HOME/bin/javac" -d "$OUT_PATH" -classpath "$OUT_PATH:$JCDK_PATH/lib/api.jar" -sourcepath "$APPLET_PATH" -target 1.2 -g:none -Xlint -Xlint:-options -Xlint:-serial -source 1.3 "$APPLET_SOURCE"
+"$JAVA_HOME/bin/javac" -d "$OUT_PATH" -classpath "$OUT_PATH:$JCDK_PATH/lib/api.jar" -sourcepath "$APPLET_PATH" -target 1.2 -g:none -Xlint -Xlint:-options -Xlint:-serial -source 1.3 "$APPLET_SOURCE" || (rm -rf "$OUT_PATH"; exit 1)
 
 # Convert to CAP:
-bash "$JCDK_PATH/bin/converter" -classdir "$OUT_PATH" -exportpath "$JCDK_PATH/api_export_files" -verbose -nobanner -out CAP EXP -applet "$APPLET_AID" "$APPLET_CLASS" "$APPLET_PACKAGE" "$APPLET_PACKAGE_AID" "$APPLET_VERSION"
+bash "$JCDK_PATH/bin/converter" -classdir "$OUT_PATH" -exportpath "$JCDK_PATH/api_export_files" -verbose -nobanner -out CAP EXP -applet "$APPLET_AID" "$APPLET_CLASS" "$APPLET_PACKAGE" "$APPLET_PACKAGE_AID" "$APPLET_VERSION" || (rm -rf "$OUT_PATH"; exit 1)
 
 read -sp 'Enter the master password: ' MASTER_PWD; echo
 
 # Install the applet:
-"$JAVA_HOME/bin/java" -jar "$PROJECT_HOME/ext/gp.jar" -d --install "$OUT_PATH/$APPLET_PACKAGE/javacard/$APPLET_PACKAGE.cap" --params "$MASTER_PWD" "$@"
+"$JAVA_HOME/bin/java" -jar "$PROJECT_HOME/ext/gp.jar" --reinstall "$OUT_PATH/$APPLET_PACKAGE/javacard/$APPLET_PACKAGE.cap" --params "$MASTER_PWD" "$@"
 
 MASTER_PWD=''
 
