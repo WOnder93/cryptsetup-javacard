@@ -306,7 +306,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         signature.sign(apdubuf, pdLengthOffset, signedDataLength, apdubuf, sigOffset);
         writeShort(apdubuf, sigLengthOffset, sigLength);
         
-        state = State.KEY_ESTABILISHED;
+        state = STATE_KEY_ESTABILISHED;
         return (short)((short)(cardpdOffset - sigLengthOffset) + cardpdLength);
     }
     
@@ -344,11 +344,13 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         
         cipher.init(cipherKey, Cipher.MODE_ENCRYPT, apdubuf, ivOffset, BLOCK_LENGTH);        
         cipher.doFinal(apdubuf, payloadOffset, payloadLength, apdubuf, payloadOffset);
-        
+         
+        writeShort(apdubuf, seqNumOffset, (short)(seqNum + 1));
+
         mac.init(macKey, Signature.MODE_SIGN);
         mac.sign(apdubuf, seqNumOffset, (short) ( payloadLength + payloadOffset - seqNumOffset), apdubuf, dataOffset);
         
-        seqNum = (short) (seqNum + 1) ;
+        seqNum = (short) (seqNum + 2) ;
         return (short)((short)(payloadOffset + payloadLength) - dataOffset);
     }
 
@@ -386,42 +388,36 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     }
     
     private short commandAuth(byte[] buffer, short offset, short length) {
-        // TODO
-        
-        if ( (state == State.KEY_ESTABILISHED) == true){
-       
-             if (masterPassword.check(buffer, offset, (byte)length) == false){
-                state = State.IDLE;
-                ISOException.throwIt(ISO7816.SW_WRONG_DATA);
-            }
-            
-            state = State.AUTHENTICATED;
+        if (state != STATE_KEY_ESTABILISHED) {
+            ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
         }
-        
-        return -1;
+       
+        if (masterPassword.check(buffer, offset, (byte)length) == false){
+            state = STATE_IDLE;
+            ISOException.throwIt(ISO7816.SW_WRONG_DATA);
+        }
+            
+        state = STATE_AUTHENTICATED;
+        return 0;
     }
 
     private short commandChangePw(byte[] buffer, short offset, short length) {
-        // TODO
-        
-        if ( (state == State.AUTHENTICATED) == true){
-       
-            masterPassword.update(buffer, offset, (byte)length);
+        if (state != STATE_AUTHENTICATED) {
+            ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
         }
-        return -1;
+        masterPassword.update(buffer, offset, (byte)length);
+        return 0;
     }
 
     private short commandGenKey(byte[] buffer, short offset, short length) {
         // TODO
-        
-        if ( (state == State.AUTHENTICATED) == true){
-            byte keyLen = buffer[offset] ;
-            m_secureRandom.generateData(buffer, (short) (offset - 2), keyLen);
-            buffer[offset-3] = keyLen ;
-           return (short) ( keyLen + 1);
+        if (state != STATE_AUTHENTICATED) {
+            ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
         }
         
-        return -1;
+        byte keyLen = buffer[offset] ;
+        m_secureRandom.generateData(buffer, (short) (offset - 3), keyLen);
+        return keyLen;
     }
 
     private short commandStoreKey(byte[] buffer, short offset, short length) {
