@@ -128,6 +128,8 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     
     private short seqNum;
     
+    private   RandomData     m_secureRandom = null;
+
     /* TODO ... */
     
     private static short readShort(byte[] buf, short offset) {
@@ -200,7 +202,11 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         macKey = (HMACKey)KeyBuilder.buildKey(KeyBuilder.TYPE_HMAC_TRANSIENT_DESELECT,
                 KeyBuilder.LENGTH_HMAC_SHA_256_BLOCK_64, false);
         mac = Signature.getInstance(Signature.ALG_HMAC_SHA_256, false);
+        
         /* TODO: ... */
+        
+        m_secureRandom = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
+
     }
     
     public final boolean select() {
@@ -300,6 +306,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         signature.sign(apdubuf, pdLengthOffset, signedDataLength, apdubuf, sigOffset);
         writeShort(apdubuf, sigLengthOffset, sigLength);
         
+        state = State.KEY_ESTABILISHED;
         return (short)((short)(cardpdOffset - sigLengthOffset) + cardpdLength);
     }
     
@@ -333,6 +340,15 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             payloadLength = (short)(payloadLength + (short)(BLOCK_LENGTH - extra));
         }
         /*  Not completed ....... */  
+        m_secureRandom.generateData(apdubuf, ivOffset, BLOCK_LENGTH);
+        
+        cipher.init(cipherKey, Cipher.MODE_ENCRYPT, apdubuf, ivOffset, BLOCK_LENGTH);        
+        cipher.doFinal(apdubuf, payloadOffset, payloadLength, apdubuf, payloadOffset);
+        
+        mac.init(macKey, Signature.MODE_SIGN);
+        mac.sign(apdubuf, seqNumOffset, (short) ( payloadLength + payloadOffset - seqNumOffset), apdubuf, dataOffset);
+        
+        seqNum = (short) (seqNum + 1) ;
         return (short)((short)(payloadOffset + payloadLength) - dataOffset);
     }
 
@@ -371,16 +387,40 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     
     private short commandAuth(byte[] buffer, short offset, short length) {
         // TODO
+        
+        if ( (state == State.KEY_ESTABILISHED) == true){
+       
+             if (masterPassword.check(buffer, offset, (byte)length) == false){
+                state = State.IDLE;
+                ISOException.throwIt(ISO7816.SW_WRONG_DATA);
+            }
+            
+            state = State.AUTHENTICATED;
+        }
+        
         return -1;
     }
 
     private short commandChangePw(byte[] buffer, short offset, short length) {
         // TODO
+        
+        if ( (state == State.AUTHENTICATED) == true){
+       
+            masterPassword.update(buffer, offset, (byte)length);
+        }
         return -1;
     }
 
     private short commandGenKey(byte[] buffer, short offset, short length) {
         // TODO
+        
+        if ( (state == State.AUTHENTICATED) == true){
+            byte keyLen = buffer[offset] ;
+            m_secureRandom.generateData(buffer, (short) (offset - 2), keyLen);
+            buffer[offset-3] = keyLen ;
+           return (short) ( keyLen + 1);
+        }
+        
         return -1;
     }
 
