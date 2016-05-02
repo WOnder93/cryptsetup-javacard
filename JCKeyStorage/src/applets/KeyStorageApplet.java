@@ -17,6 +17,30 @@ import javacardx.crypto.Cipher;
  */
 public class KeyStorageApplet extends Applet implements ExtendedLength {
     
+    private static short readShort(byte[] buf, short offset) {
+        /* read high byte: */
+        short res = (short)(buf[(short)(offset + (short)1)] & (short)0xFF);
+        res <<= (short)8;
+        /* read low byte: */
+        res |= (short)(buf[offset] & (short)0xFF);
+        return res;
+    }
+    
+    private static void writeShort(byte[] buf, short offset, short value) {
+        buf[offset] = (byte)(value & (short)0xFF);
+        ++offset;
+        value >>= (short)8;
+        buf[offset] = (byte)(value & (short)0xFF);
+    }
+    
+    private static boolean arraysEqual(byte[] array1, short offset1, byte[] array2, short offset2, short length) {
+        byte different = (byte)0x00;
+        for (short i = 0; i < (short)length; i++) {
+            different |= (byte)(array1[(short)(offset1 + i)] ^ array2[(short)(offset2 + i)]);
+        }
+        return different == (byte)0x00;
+    }
+    
     public static class HMAC {
         private final MessageDigest digest;
         private final short digestBlockSize;
@@ -55,6 +79,10 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             xorBuffer(keyBuffer, digestBlockSize, digestBlockSize, (byte)0x5C);
         }
         
+        public final void clearKey() {
+            Util.arrayFillNonAtomic(keyBuffer, (short)0, (short)keyBuffer.length, (byte)0);
+        }
+        
         public final void sign(byte[] inBuffer, short inOffset, short inLength, byte[] outBuffer, short outOffset) {
             short digestLength = digest.getLength();
             digest.update(keyBuffer, (short)0, digestBlockSize);
@@ -76,11 +104,11 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
 
         public final boolean verify(byte[] inBuffer, short inOffset, short inLength, byte[] sigBuffer, short sigOffset) {
             hmac.sign(inBuffer, inOffset, inLength, auxBuffer, (short)0);
-            byte different = (byte)0x00;
-            for (short i = 0; i < (short)auxBuffer.length; i++) {
-                different |= (byte)(auxBuffer[i] ^ sigBuffer[(short)(sigOffset + i)]);
+            try {
+                return arraysEqual(sigBuffer, sigOffset, auxBuffer, (short)0, hmac.getLength());
+            } finally {
+                Util.arrayFillNonAtomic(auxBuffer, (short)0, (short)auxBuffer.length, (byte)0);
             }
-            return different == (byte)0x00;
         }
     }
 
@@ -149,7 +177,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         (byte)0xFE, (byte)0xB8, (byte)0xDE, (byte)0xEC,
         (byte)0xC1, (byte)0x46, (byte)0xB9, (byte)0xB1,
     };
-    public static final byte[] EC_FP_G_x = new byte[] {
+    public static final byte[] EC_FP_G_X = new byte[] {
         (byte)0x18, (byte)0x8D, (byte)0xA8, (byte)0x0E,
         (byte)0xB0, (byte)0x30, (byte)0x90, (byte)0xF6,
         (byte)0x7C, (byte)0xBF, (byte)0x20, (byte)0xEB,
@@ -157,7 +185,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         (byte)0xF4, (byte)0xFF, (byte)0x0A, (byte)0xFD,
         (byte)0x82, (byte)0xFF, (byte)0x10, (byte)0x12,
     };
-    public static final byte[] EC_FP_G_y = new byte[] {
+    public static final byte[] EC_FP_G_Y = new byte[] {
         (byte)0x07, (byte)0x19, (byte)0x2B, (byte)0x95,
         (byte)0xFF, (byte)0xC8, (byte)0xDA, (byte)0x78,
         (byte)0x63, (byte)0x10, (byte)0x11, (byte)0xED,
@@ -206,22 +234,6 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     private final byte[] keyStore;
     private final byte[] auxBuffer;
     
-    private static short readShort(byte[] buf, short offset) {
-        /* read high byte: */
-        short res = (short)(buf[(short)(offset + (short)1)] & (short)0xFF);
-        res <<= (short)8;
-        /* read low byte: */
-        res |= (short)(buf[offset] & (short)0xFF);
-        return res;
-    }
-    
-    private static void writeShort(byte[] buf, short offset, short value) {
-        buf[offset] = (byte)(value & (short)0xFF);
-        ++offset;
-        value >>= (short)8;
-        buf[offset] = (byte)(value & (short)0xFF);
-    }
-    
     private KeyStorageApplet(byte[] bArray, short bOffset, byte bLength) throws ISOException {
         state = STATE_IDLE;
         auxBuffer = JCSystem.makeTransientByteArray(AUX_BUFFER_SIZE, JCSystem.CLEAR_ON_DESELECT);
@@ -240,31 +252,8 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         signature = Signature.getInstance(Signature.ALG_RSA_SHA_PKCS1, false);
         signature.init(signingKeyPair.getPrivate(), Signature.MODE_SIGN);
         
-        /* prepare an ANSI X9.62 uncompressed EC point representation for G: */
-        short gSize = (short)1;
-        gSize += (short)EC_FP_G_x.length;
-        gSize += (short)EC_FP_G_y.length;
-        auxBuffer[0] = 0x04;
-        short off = 1;
-        off = Util.arrayCopy(EC_FP_G_x, (short)0, auxBuffer, off, (short)EC_FP_G_x.length);
-        Util.arrayCopy(EC_FP_G_y, (short)0, auxBuffer, off, (short)EC_FP_G_y.length);
-        
-        /* pre-set basic EC parameters: */
         dhPubKey = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC,  EC_BITS, false);
-        dhPubKey.setFieldFP(EC_FP_P, (short)0, (short)EC_FP_P.length);
-        dhPubKey.setA(EC_FP_A,   (short)0, (short)EC_FP_A.length);
-        dhPubKey.setB(EC_FP_B,   (short)0, (short)EC_FP_B.length);
-        dhPubKey.setG(auxBuffer, (short)0, gSize);
-        dhPubKey.setR(EC_FP_R,   (short)0, (short)EC_FP_R.length);
-        dhPubKey.setK(EC_FP_K);
-
         dhPrivKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, EC_BITS, false);
-        dhPrivKey.setFieldFP(EC_FP_P, (short)0, (short)EC_FP_P.length);
-        dhPrivKey.setA(EC_FP_A,   (short)0, (short)EC_FP_A.length);
-        dhPrivKey.setB(EC_FP_B,   (short)0, (short)EC_FP_B.length);
-        dhPrivKey.setG(auxBuffer, (short)0, gSize);
-        dhPrivKey.setR(EC_FP_R,   (short)0, (short)EC_FP_R.length);
-        dhPrivKey.setK(EC_FP_K);
         
         dhKeyPair = new KeyPair(dhPubKey, dhPrivKey);
         sessKeyAgreement = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DHC, false);
@@ -279,6 +268,32 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         secureRandom = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
         
         keyStore = new byte[(short)(MAX_KEY_ENTRIES * (short)(UUID_LENGTH + MAX_KEY_SIZE))];
+    }
+    
+    private void setDHKeyParams() {
+        /* prepare an ANSI X9.62 uncompressed EC point representation for G: */
+        short gSize = (short)1;
+        gSize += (short)EC_FP_G_X.length;
+        gSize += (short)EC_FP_G_Y.length;
+        auxBuffer[0] = 0x04;
+        short off = 1;
+        off = Util.arrayCopy(EC_FP_G_X, (short)0, auxBuffer, off, (short)EC_FP_G_X.length);
+        Util.arrayCopy(EC_FP_G_Y, (short)0, auxBuffer, off, (short)EC_FP_G_Y.length);
+        
+        /* pre-set basic EC parameters: */
+        dhPubKey.setFieldFP(EC_FP_P, (short)0, (short)EC_FP_P.length);
+        dhPubKey.setA(EC_FP_A,   (short)0, (short)EC_FP_A.length);
+        dhPubKey.setB(EC_FP_B,   (short)0, (short)EC_FP_B.length);
+        dhPubKey.setG(auxBuffer, (short)0, gSize);
+        dhPubKey.setR(EC_FP_R,   (short)0, (short)EC_FP_R.length);
+        dhPubKey.setK(EC_FP_K);
+
+        dhPrivKey.setFieldFP(EC_FP_P, (short)0, (short)EC_FP_P.length);
+        dhPrivKey.setA(EC_FP_A,   (short)0, (short)EC_FP_A.length);
+        dhPrivKey.setB(EC_FP_B,   (short)0, (short)EC_FP_B.length);
+        dhPrivKey.setG(auxBuffer, (short)0, gSize);
+        dhPrivKey.setR(EC_FP_R,   (short)0, (short)EC_FP_R.length);
+        dhPrivKey.setK(EC_FP_K);
     }
     
     private void resetSession() {
@@ -332,7 +347,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         return totalSize;
     }
     
-    private short dhHandshake (APDU apdu) {
+    private short dhHandshake(APDU apdu) {
         byte[]    apdubuf = apdu.getBuffer();
         short     dataLen = apdu.getIncomingLength();
         
@@ -414,7 +429,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         if (extra != (short)0) {
             payloadLength = (short)(payloadLength + (short)(BLOCK_LENGTH - extra));
         }
-        /*  Not completed ....... */  
+        
         secureRandom.generateData(apdubuf, ivOffset, BLOCK_LENGTH);
         
         cipher.init(cipherKey, Cipher.MODE_ENCRYPT, apdubuf, ivOffset, BLOCK_LENGTH);
@@ -519,30 +534,103 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         return -1;
     }
     
-    private short writeEntry(short entryOffset,
+    private void deleteEntry(short entryOffset) {
+        short entryUuidOffset = entryOffset;
+        short entryKeySizeOffset = (short)(entryUuidOffset + UUID_LENGTH);
+        short entryKeyOffset = (short)(entryKeySizeOffset + 1);
+        
+        short keyLength = (short)(keyStore[entryKeySizeOffset] & 0xFF);
+        
+        keyStore[entryKeySizeOffset] = (byte)0x00;
+
+        short end = (short)(entryKeyOffset + keyLength);
+        while (entryKeyOffset < end) {
+            keyStore[entryKeyOffset] = (byte)0x00;
+            ++entryKeyOffset;
+        }
+    }
+    
+    private short readEntry(short entryOffset, byte[] key, short keyOffset) {
+        short entryUuidOffset = entryOffset;
+        short entryKeySizeOffset = (short)(entryUuidOffset + UUID_LENGTH);
+        short entryKeyOffset = (short)(entryKeySizeOffset + 1);
+        
+        short keyLength = (short)(keyStore[entryKeySizeOffset] & 0xFF);
+        Util.arrayCopy(keyStore, entryKeyOffset, key, keyOffset, keyLength);
+        return keyLength;
+    }
+    
+    private void writeEntry(short entryOffset,
             byte[] uuid, short uuidOffset,
-            byte[] key, short keyOffset, short keyLength) {
-        Util.arrayCopy(uuid, uuidOffset, keyStore, (short)0, UUID_LENGTH);
-        // ...
-        return 0;
+            byte[] key, short keyOffset, short keyLength)
+    {
+        short entryUuidOffset = entryOffset;
+        short entryKeySizeOffset = (short)(entryUuidOffset + UUID_LENGTH);
+        short entryKeyOffset = (short)(entryKeySizeOffset + 1);
+        Util.arrayCopy(uuid, uuidOffset, keyStore, entryUuidOffset, UUID_LENGTH);
+        keyStore[entryKeySizeOffset] = (byte)(keyLength & 0xFF);
+        Util.arrayCopy(key, keyOffset, keyStore, entryKeyOffset, keyLength);
+    }
+    
+    private short findEntry(byte[] uuid, short uuidOffset) {
+        for (short offset = 0; offset < keyStore.length; offset += KEY_ENTRY_SIZE) {
+            if (keyStore[(short)(offset + UUID_LENGTH)] == 0) {
+                continue;
+            }
+            if (arraysEqual(uuid, uuidOffset, keyStore, offset, UUID_LENGTH)) {
+                return offset;
+            }
+        }
+        return -1;
     }
 
     private short commandStoreKey(byte[] buffer, short inOffset, short length, short outOffset) {
-        ISOException.throwIt(ISO7816.SW_FUNC_NOT_SUPPORTED);
-        // TODO
-        return -1;
+        short keyLengthOffset = (short)(inOffset + UUID_LENGTH);
+        short keyOffset = (short)(keyLengthOffset + 1);
+        short keyLength = (short)(buffer[keyLengthOffset] & 0xff);
+        if (keyLength <= 0 || keyLength > MAX_KEY_SIZE) {
+            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+        
+        short entry = findEntry(buffer, inOffset);
+        if (entry < 0) {
+            entry = findEmptyEntry();
+            if (entry < 0) {
+                ISOException.throwIt(ISO7816.SW_WARNING_STATE_UNCHANGED);
+            }
+        }
+        JCSystem.beginTransaction();
+        writeEntry(entry, buffer, inOffset, buffer, keyOffset, keyLength);
+        JCSystem.commitTransaction();
+        return 0;
     }
 
     private short commandLoadKey(byte[] buffer, short inOffset, short length, short outOffset) {
-        ISOException.throwIt(ISO7816.SW_FUNC_NOT_SUPPORTED);
-        // TODO
-        return -1;
+        if (length != UUID_LENGTH) {
+            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+        
+        short entry = findEntry(buffer, inOffset);
+        if (entry < 0) {
+            ISOException.throwIt(ISO7816.SW_RECORD_NOT_FOUND);
+        }
+        return readEntry(entry, buffer, outOffset);
     }
 
     private short commandDelKey(byte[] buffer, short inOffset, short length, short outOffset) {
-        ISOException.throwIt(ISO7816.SW_FUNC_NOT_SUPPORTED);
-        // TODO
-        return -1;
+        if (length != UUID_LENGTH) {
+            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+        
+        short entry = findEntry(buffer, inOffset);
+        if (entry < 0) {
+            ISOException.throwIt(ISO7816.SW_WARNING_STATE_UNCHANGED);
+        }
+        
+        JCSystem.beginTransaction();
+        deleteEntry(entry);
+        JCSystem.commitTransaction();
+        return 0;
     }
 
     private short commandClose(byte[] buffer, short inOffset, short length, short outOffset) {

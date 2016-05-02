@@ -47,8 +47,8 @@ public class KeyStorageClient {
     private static ECDomainParameters getECParameters() {
         ECCurve curve = new SecP192R1Curve();
         
-        BigInteger g_x = new BigInteger(1, KeyStorageApplet.EC_FP_G_x);
-        BigInteger g_y = new BigInteger(1, KeyStorageApplet.EC_FP_G_y);
+        BigInteger g_x = new BigInteger(1, KeyStorageApplet.EC_FP_G_X);
+        BigInteger g_y = new BigInteger(1, KeyStorageApplet.EC_FP_G_Y);
         ECPoint g = curve.createPoint(g_x, g_y);
         
         BigInteger n = new BigInteger(1, KeyStorageApplet.EC_FP_R);
@@ -267,8 +267,6 @@ public class KeyStorageClient {
             res[seqNumOffset] = (byte)(seqNum & 0xFF);
             res[seqNumOffset + 1] = (byte)((seqNum >> 8) & 0xFF);
             
-            seqNum++;
-            
             hmac256.init(authKey);
             hmac256.update(res, seqNumOffset,
                     KeyStorageApplet.SEQNUM_LENGTH +
@@ -292,7 +290,7 @@ public class KeyStorageClient {
             }
 
             int claimedSeqNum = (data[seqNumOffset] & 0xFF) | ((data[seqNumOffset + 1] & 0xFF) << 8);
-            if (claimedSeqNum != seqNum) {
+            if (claimedSeqNum != (seqNum + 1)) {
                 throw new ClientException("Sequential number check failed!");
             }
             
@@ -303,7 +301,7 @@ public class KeyStorageClient {
             for (int off = 0; off < res.length; off += blockSize) {
                 aesCbc.processBlock(data, dataOffset + off, res, off);
             }
-            seqNum++;
+            seqNum += 2;
             return res;
         }
         
