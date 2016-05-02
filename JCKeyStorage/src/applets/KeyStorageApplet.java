@@ -17,6 +17,73 @@ import javacardx.crypto.Cipher;
  */
 public class KeyStorageApplet extends Applet implements ExtendedLength {
     
+    public static class HMAC {
+        private final MessageDigest digest;
+        private final short digestBlockSize;
+        private final byte[] keyBuffer;
+        
+        public HMAC(MessageDigest digest, short digestBlockSize) {
+            this.digest = digest;
+            this.digestBlockSize = digestBlockSize;
+            keyBuffer = new byte[(short)(2 * digestBlockSize)];
+        }
+        
+        public final short getLength() {
+            return digest.getLength();
+        }
+        
+        private void xorBuffer(byte[] buffer, short offset, short length, byte xorKey) {
+            short end = (short)(offset + length);
+            while (offset < end) {
+                buffer[offset] ^= xorKey;
+                offset++;
+            }
+        }
+        
+        public final void setKey(byte[] buffer, short offset, short length) {
+            short digestLength = digest.getLength();
+            if (length <= digestBlockSize) {
+                Util.arrayCopyNonAtomic(buffer, offset, keyBuffer, (short)0, length);
+                Util.arrayFillNonAtomic(keyBuffer, length, (short)(digestBlockSize - length), (byte)0);
+            } else {
+                digest.doFinal(buffer, offset, length, keyBuffer, (short)0);
+                Util.arrayFillNonAtomic(keyBuffer, digestLength, (short)(digestBlockSize - digestLength), (byte)0);
+            }
+            Util.arrayCopyNonAtomic(keyBuffer, (short)0, keyBuffer, digestBlockSize, digestBlockSize);
+            
+            xorBuffer(keyBuffer, (short)0, digestBlockSize, (byte)0x36);
+            xorBuffer(keyBuffer, digestBlockSize, digestBlockSize, (byte)0x5C);
+        }
+        
+        public final void sign(byte[] inBuffer, short inOffset, short inLength, byte[] outBuffer, short outOffset) {
+            short digestLength = digest.getLength();
+            digest.update(keyBuffer, (short)0, digestBlockSize);
+            digest.doFinal(inBuffer, inOffset, inLength, outBuffer, outOffset);
+            
+            digest.update(keyBuffer, digestBlockSize, digestBlockSize);
+            digest.doFinal(outBuffer, outOffset, digestLength, outBuffer, outOffset);
+        }
+    }
+    
+    public static class HMACVerifier {
+        private final HMAC hmac;
+        private final byte[] auxBuffer;
+
+        public HMACVerifier(HMAC hmac) {
+            this.hmac = hmac;
+            auxBuffer = JCSystem.makeTransientByteArray(hmac.getLength(), JCSystem.CLEAR_ON_DESELECT);
+        }
+
+        public final boolean verify(byte[] inBuffer, short inOffset, short inLength, byte[] sigBuffer, short sigOffset) {
+            hmac.sign(inBuffer, inOffset, inLength, auxBuffer, (short)0);
+            byte different = (byte)0x00;
+            for (short i = 0; i < (short)auxBuffer.length; i++) {
+                different |= (byte)(auxBuffer[i] ^ sigBuffer[(short)(sigOffset + i)]);
+            }
+            return different == (byte)0x00;
+        }
+    }
+
     public static final byte[] AID = new byte[] {
         (byte)0x4a, (byte)0x43, (byte)0x4b, (byte)0x65, (byte)0x79, (byte)0x53,
         (byte)0x74, (byte)0x6f, (byte)0x72, (byte)0x61, (byte)0x67, (byte)0x65
@@ -36,7 +103,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     public static final byte CMD_DELKEY     = (byte)0x05;
     public static final byte CMD_CLOSE      = (byte)0x06;
     
-    public static final short RSA_BITS = KeyBuilder.LENGTH_RSA_2048;
+    public static final short RSA_BITS = KeyBuilder.LENGTH_RSA_1024;
     public static final short EC_BITS = KeyBuilder.LENGTH_EC_FP_192;
     
     public static final short SESSION_KEY_LENGTH = 20;
@@ -51,7 +118,11 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     public static final byte MAX_PW_TRIES = 5;
     public static final byte MAX_PW_LEN = 64;
     
+    public static final short UUID_LENGTH = 40;
     public static final short MAX_KEY_SIZE = 128;
+    public static final short KEY_ENTRY_SIZE = UUID_LENGTH + 1 + MAX_KEY_SIZE;
+    
+    public static final short MAX_KEY_ENTRIES = 64;
     
     /* secp192r1, as per http://www.secg.org/sec2-v2.pdf */
     public static final byte[] EC_FP_P = new byte[] {
@@ -104,17 +175,11 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     };
     public static final short EC_FP_K = 1;
     
-    /**
-     * A dummy key for MAC so that 32 bytes are preallocated.
-     * 
-     * (JCardSim is unable to resize the key buffer after initialization,
-     * this may also happen on card if the programmers were dumb)
-     */
-    private static final byte[] DUMMY_KEY = new byte[32];
-    
     private static final short STATE_IDLE = (short)0;
     private static final short STATE_KEY_ESTABILISHED = (short)1;
     private static final short STATE_AUTHENTICATED = (short)2;
+    
+    private static final short AUX_BUFFER_SIZE = 64;
     
     private short state;
 
@@ -131,14 +196,15 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     private final AESKey cipherKey;
     private final Cipher cipher;
     
-    private final HMACKey macKey;
-    private final Signature mac;
+    private final HMAC mac;
+    private final HMACVerifier macVerifier;
     
+    private final RandomData secureRandom;
+
     private short seqNum;
     
-    private   RandomData     m_secureRandom = null;
-
-    /* TODO ... */
+    private final byte[] keyStore;
+    private final byte[] auxBuffer;
     
     private static short readShort(byte[] buf, short offset) {
         /* read high byte: */
@@ -158,6 +224,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     
     private KeyStorageApplet(byte[] bArray, short bOffset, byte bLength) throws ISOException {
         state = STATE_IDLE;
+        auxBuffer = JCSystem.makeTransientByteArray(AUX_BUFFER_SIZE, JCSystem.CLEAR_ON_DESELECT);
         
         masterPassword = new OwnerPIN(MAX_PW_TRIES, MAX_PW_LEN);
         if (bLength == 0) {
@@ -177,27 +244,26 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         short gSize = (short)1;
         gSize += (short)EC_FP_G_x.length;
         gSize += (short)EC_FP_G_y.length;
-        byte[] gBuf = new byte[gSize];
-        gBuf[0] = 0x04;
+        auxBuffer[0] = 0x04;
         short off = 1;
-        off = Util.arrayCopy(EC_FP_G_x, (short)0, gBuf, off, (short)EC_FP_G_x.length);
-        off = Util.arrayCopy(EC_FP_G_y, (short)0, gBuf, off, (short)EC_FP_G_y.length);
+        off = Util.arrayCopy(EC_FP_G_x, (short)0, auxBuffer, off, (short)EC_FP_G_x.length);
+        Util.arrayCopy(EC_FP_G_y, (short)0, auxBuffer, off, (short)EC_FP_G_y.length);
         
         /* pre-set basic EC parameters: */
         dhPubKey = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC,  EC_BITS, false);
         dhPubKey.setFieldFP(EC_FP_P, (short)0, (short)EC_FP_P.length);
-        dhPubKey.setA(EC_FP_A, (short)0, (short)EC_FP_A.length);
-        dhPubKey.setB(EC_FP_B, (short)0, (short)EC_FP_B.length);
-        dhPubKey.setG(gBuf,    (short)0, (short)gBuf.length);
-        dhPubKey.setR(EC_FP_R, (short)0, (short)EC_FP_R.length);
+        dhPubKey.setA(EC_FP_A,   (short)0, (short)EC_FP_A.length);
+        dhPubKey.setB(EC_FP_B,   (short)0, (short)EC_FP_B.length);
+        dhPubKey.setG(auxBuffer, (short)0, gSize);
+        dhPubKey.setR(EC_FP_R,   (short)0, (short)EC_FP_R.length);
         dhPubKey.setK(EC_FP_K);
 
         dhPrivKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, EC_BITS, false);
         dhPrivKey.setFieldFP(EC_FP_P, (short)0, (short)EC_FP_P.length);
-        dhPrivKey.setA(EC_FP_A, (short)0, (short)EC_FP_A.length);
-        dhPrivKey.setB(EC_FP_B, (short)0, (short)EC_FP_B.length);
-        dhPrivKey.setG(gBuf,    (short)0, (short)gBuf.length);
-        dhPrivKey.setR(EC_FP_R, (short)0, (short)EC_FP_R.length);
+        dhPrivKey.setA(EC_FP_A,   (short)0, (short)EC_FP_A.length);
+        dhPrivKey.setB(EC_FP_B,   (short)0, (short)EC_FP_B.length);
+        dhPrivKey.setG(auxBuffer, (short)0, gSize);
+        dhPrivKey.setR(EC_FP_R,   (short)0, (short)EC_FP_R.length);
         dhPrivKey.setK(EC_FP_K);
         
         dhKeyPair = new KeyPair(dhPubKey, dhPrivKey);
@@ -207,14 +273,12 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
                 KeyBuilder.LENGTH_AES_256, false);
         cipher = Cipher.getInstance(Cipher.ALG_AES_BLOCK_128_CBC_NOPAD, false);
         
-        macKey = (HMACKey)KeyBuilder.buildKey(KeyBuilder.TYPE_HMAC_TRANSIENT_DESELECT,
-                KeyBuilder.LENGTH_HMAC_SHA_256_BLOCK_64, false);
-        macKey.setKey(DUMMY_KEY, (short)0, (short)DUMMY_KEY.length);
-        mac = Signature.getInstance(Signature.ALG_HMAC_SHA_256, false);
+        mac = new HMAC(MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false), (short)64);
+        macVerifier = new HMACVerifier(mac);
         
-        /* TODO: ... */
+        secureRandom = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
         
-        m_secureRandom = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
+        keyStore = new byte[(short)(MAX_KEY_ENTRIES * (short)(UUID_LENGTH + MAX_KEY_SIZE))];
     }
     
     private void resetSession() {
@@ -280,18 +344,17 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         dhKeyPair.genKeyPair();
         sessKeyAgreement.init(dhPrivKey);
         
-        byte[] sessKey = new byte[SESSION_KEY_LENGTH];
-        short sessKeyLen = sessKeyAgreement.generateSecret(apdubuf, pubDataOffset, pubdataLen, sessKey, (short)0);
+        short sessKeyLen = sessKeyAgreement.generateSecret(
+                apdubuf, pubDataOffset, pubdataLen,
+                auxBuffer, (short)0);
         
-        macKey.setKey(sessKey, (short)0, sessKeyLen);
-        mac.init(macKey, Signature.MODE_SIGN);
+        mac.setKey(auxBuffer, (short)0, sessKeyLen);
         
-        byte[] keyBuf = new byte[mac.getLength()];
-        mac.sign(KEY_LABEL_ENC, (short)0, (short)KEY_LABEL_ENC.length, keyBuf, (short)0);
-        cipherKey.setKey(keyBuf, (short)0);
+        mac.sign(KEY_LABEL_ENC, (short)0, (short)KEY_LABEL_ENC.length, auxBuffer, (short)0);
+        cipherKey.setKey(auxBuffer, (short)0);
        
-        mac.sign(KEY_LABEL_AUTH, (short)0, (short)KEY_LABEL_AUTH.length, keyBuf, (short)0);
-        macKey.setKey(keyBuf, (short)0, (short)keyBuf.length);
+        mac.sign(KEY_LABEL_AUTH, (short)0, (short)KEY_LABEL_AUTH.length, auxBuffer, (short)0);
+        mac.setKey(auxBuffer, (short)0, mac.getLength());
 
         short sigLength = signature.getLength();
         short sigLengthOffset = dataOffset;
@@ -332,8 +395,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         
         short apduLen = (short)(dataOffset + dataLen);
         
-        mac.init(macKey, Signature.MODE_VERIFY);
-	if (!mac.verify(apdubuf, seqNumOffset, (short)(apduLen - seqNumOffset), apdubuf, dataOffset, MAC_LENGTH)) {
+	if (!macVerifier.verify(apdubuf, seqNumOffset, (short)(apduLen - seqNumOffset), apdubuf, dataOffset)) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         
@@ -353,14 +415,13 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             payloadLength = (short)(payloadLength + (short)(BLOCK_LENGTH - extra));
         }
         /*  Not completed ....... */  
-        m_secureRandom.generateData(apdubuf, ivOffset, BLOCK_LENGTH);
+        secureRandom.generateData(apdubuf, ivOffset, BLOCK_LENGTH);
         
         cipher.init(cipherKey, Cipher.MODE_ENCRYPT, apdubuf, ivOffset, BLOCK_LENGTH);
         cipher.doFinal(apdubuf, payloadOffset, payloadLength, apdubuf, payloadOffset);
          
         writeShort(apdubuf, seqNumOffset, (short)(seqNum + 1));
 
-        mac.init(macKey, Signature.MODE_SIGN);
         mac.sign(apdubuf, seqNumOffset, (short)(payloadLength + payloadOffset - seqNumOffset), apdubuf, dataOffset);
         
         seqNum = (short) (seqNum + 2) ;
@@ -445,8 +506,25 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         
-        m_secureRandom.generateData(buffer, outOffset, keyLen);
+        secureRandom.generateData(buffer, outOffset, keyLen);
         return keyLen;
+    }
+    
+    private short findEmptyEntry() {
+        for (short offset = 0; offset < keyStore.length; offset += KEY_ENTRY_SIZE) {
+            if (keyStore[(short)(offset + UUID_LENGTH)] == 0) {
+                return offset;
+            }
+        }
+        return -1;
+    }
+    
+    private short writeEntry(short entryOffset,
+            byte[] uuid, short uuidOffset,
+            byte[] key, short keyOffset, short keyLength) {
+        Util.arrayCopy(uuid, uuidOffset, keyStore, (short)0, UUID_LENGTH);
+        // ...
+        return 0;
     }
 
     private short commandStoreKey(byte[] buffer, short inOffset, short length, short outOffset) {
