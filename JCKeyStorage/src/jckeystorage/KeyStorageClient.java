@@ -225,12 +225,6 @@ public class KeyStorageClient {
             ecdh.init(keyPair.getPrivate());
             byte[] sharedSecret = ecdh.calculateAgreement(cardPub).toByteArray();
 
-            final int EC_BYTES = KeyStorageApplet.EC_BITS / 8;
-            if (sharedSecret.length > EC_BYTES) {
-                sharedSecret = Arrays.copyOfRange(sharedSecret,
-                        sharedSecret.length - EC_BYTES, sharedSecret.length);
-            }
-
             byte[] sessionMasterKey = new byte[sha1.getDigestSize()];
             sha1.update(sharedSecret, 0, sharedSecret.length); 
             sha1.doFinal(sessionMasterKey, 0);
@@ -243,7 +237,7 @@ public class KeyStorageClient {
 
             byte[] authKey = new byte[hmac256.getMacSize()];
             hmac256.update(KeyStorageApplet.KEY_LABEL_AUTH, 0, KeyStorageApplet.KEY_LABEL_AUTH.length);
-            hmac256.doFinal(encKey, 0);
+            hmac256.doFinal(authKey, 0);
 
             this.encKey = new KeyParameter(encKey);
             this.authKey = new KeyParameter(authKey);
@@ -306,8 +300,8 @@ public class KeyStorageClient {
             aesCbc.init(false, new ParametersWithIV(encKey, data, ivOffset, KeyStorageApplet.IV_LENGTH));
             
             int blockSize = aesCbc.getBlockSize();
-            for (int off = 0; off < data.length; off += blockSize) {
-                aesCbc.processBlock(data, off, res, dataOffset + off);
+            for (int off = 0; off < res.length; off += blockSize) {
+                aesCbc.processBlock(data, dataOffset + off, res, off);
             }
             seqNum++;
             return res;
@@ -327,8 +321,8 @@ public class KeyStorageClient {
 
             byte[] payload = new byte[payloadSize];
             payload[0] = cmd;
-            payload[1] = (byte)(payloadSize & 0xFF);
-            payload[2] = (byte)((payloadSize >> 8) & 0xFF);
+            payload[1] = (byte)(data.length & 0xFF);
+            payload[2] = (byte)((data.length >> 8) & 0xFF);
             System.arraycopy(data, 0, payload, 3, data.length);
 
             ResponseAPDU apdu = sendInstruction(KeyStorageApplet.INS_COMMAND, wrapData(payload));
@@ -340,7 +334,7 @@ public class KeyStorageClient {
             if (res.length < 2 + responseLength) {
                 throw new ClientException("Invalid response length!");
             }
-            return Arrays.copyOfRange(res, 2, responseLength);
+            return Arrays.copyOfRange(res, 2, 2 + responseLength);
         }
 
         private void checkAuthenticated() throws ClientException {

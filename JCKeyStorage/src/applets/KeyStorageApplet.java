@@ -104,6 +104,14 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     };
     public static final short EC_FP_K = 1;
     
+    /**
+     * A dummy key for MAC so that 32 bytes are preallocated.
+     * 
+     * (JCardSim is unable to resize the key buffer after initialization,
+     * this may also happen on card if the programmers were dumb)
+     */
+    private static final byte[] DUMMY_KEY = new byte[32];
+    
     private static final short STATE_IDLE = (short)0;
     private static final short STATE_KEY_ESTABILISHED = (short)1;
     private static final short STATE_AUTHENTICATED = (short)2;
@@ -201,18 +209,20 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         
         macKey = (HMACKey)KeyBuilder.buildKey(KeyBuilder.TYPE_HMAC_TRANSIENT_DESELECT,
                 KeyBuilder.LENGTH_HMAC_SHA_256_BLOCK_64, false);
+        macKey.setKey(DUMMY_KEY, (short)0, (short)DUMMY_KEY.length);
         mac = Signature.getInstance(Signature.ALG_HMAC_SHA_256, false);
         
         /* TODO: ... */
         
         m_secureRandom = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
-
+    }
+    
+    private void resetSession() {
+        state = STATE_IDLE;
     }
     
     public final boolean select() {
-        state = STATE_IDLE;
-        seqNum = 0;
-        /* TODO: ... */
+        resetSession();
         return true;
     }
      
@@ -297,7 +307,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         
         ECPublicKey pubKey = (ECPublicKey)dhKeyPair.getPublic();
         short cardpdLength = pubKey.getW(apdubuf, cardpdOffset);
-        writeShort(keyBuf, cardpdLengthOffset, cardpdLength);
+        writeShort(apdubuf, cardpdLengthOffset, cardpdLength);
         
         short signedDataLength = (short)2;
         signedDataLength += pubdataLen;
@@ -306,21 +316,24 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         signature.sign(apdubuf, pdLengthOffset, signedDataLength, apdubuf, sigOffset);
         writeShort(apdubuf, sigLengthOffset, sigLength);
         
+        seqNum = 0;
         state = STATE_KEY_ESTABILISHED;
         return (short)((short)(cardpdOffset - sigLengthOffset) + cardpdLength);
     }
     
     short InsCommand(APDU apdu) {
         byte[]    apdubuf = apdu.getBuffer();
-        short     dataLen = apdu.setIncomingAndReceive();
+        short     dataLen = apdu.getIncomingLength();
 
-        short dataOffset = apdu.getOffsetCdata() ;
+        short dataOffset = apdu.getOffsetCdata();
         short seqNumOffset = (short)(dataOffset + MAC_LENGTH);
         short ivOffset = (short)(seqNumOffset + SEQNUM_LENGTH);
         short payloadOffset = (short)(ivOffset + IV_LENGTH);
         
+        short apduLen = (short)(dataOffset + dataLen);
+        
         mac.init(macKey, Signature.MODE_VERIFY);
-	if (!mac.verify(apdubuf, seqNumOffset, (short)(dataLen - seqNumOffset), apdubuf, dataOffset, MAC_LENGTH)) {
+	if (!mac.verify(apdubuf, seqNumOffset, (short)(apduLen - seqNumOffset), apdubuf, dataOffset, MAC_LENGTH)) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         
@@ -329,9 +342,9 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         
-        cipher.init(cipherKey, Cipher.MODE_DECRYPT);        
+        cipher.init(cipherKey, Cipher.MODE_DECRYPT, apdubuf, ivOffset, BLOCK_LENGTH);        
         cipher.doFinal(
-                apdubuf, payloadOffset, (short)(dataLen - payloadOffset),
+                apdubuf, payloadOffset, (short)(apduLen - payloadOffset),
                 apdubuf, payloadOffset);
                
         short payloadLength = processCommand(apdubuf, payloadOffset);
@@ -342,13 +355,13 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         /*  Not completed ....... */  
         m_secureRandom.generateData(apdubuf, ivOffset, BLOCK_LENGTH);
         
-        cipher.init(cipherKey, Cipher.MODE_ENCRYPT, apdubuf, ivOffset, BLOCK_LENGTH);        
+        cipher.init(cipherKey, Cipher.MODE_ENCRYPT, apdubuf, ivOffset, BLOCK_LENGTH);
         cipher.doFinal(apdubuf, payloadOffset, payloadLength, apdubuf, payloadOffset);
          
         writeShort(apdubuf, seqNumOffset, (short)(seqNum + 1));
 
         mac.init(macKey, Signature.MODE_SIGN);
-        mac.sign(apdubuf, seqNumOffset, (short) ( payloadLength + payloadOffset - seqNumOffset), apdubuf, dataOffset);
+        mac.sign(apdubuf, seqNumOffset, (short)(payloadLength + payloadOffset - seqNumOffset), apdubuf, dataOffset);
         
         seqNum = (short) (seqNum + 2) ;
         return (short)((short)(payloadOffset + payloadLength) - dataOffset);
@@ -387,12 +400,16 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         }
     }
     
-    private short commandAuth(byte[] buffer, short offset, short length) {
+    private short commandAuth(byte[] buffer, short inOffset, short length, short outOffset) {
         if (state != STATE_KEY_ESTABILISHED) {
             ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
         }
-       
-        if (masterPassword.check(buffer, offset, (byte)length) == false){
+        
+        if (length > MAX_PW_LEN) {
+            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+        
+        if (masterPassword.check(buffer, inOffset, (byte)length) == false){
             state = STATE_IDLE;
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
@@ -401,64 +418,85 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         return 0;
     }
 
-    private short commandChangePw(byte[] buffer, short offset, short length) {
+    private short commandChangePw(byte[] buffer, short inOffset, short length, short outOffset) {
         if (state != STATE_AUTHENTICATED) {
             ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
         }
-        masterPassword.update(buffer, offset, (byte)length);
+
+        if (length > MAX_PW_LEN) {
+            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+        
+        masterPassword.update(buffer, inOffset, (byte)length);
         return 0;
     }
 
-    private short commandGenKey(byte[] buffer, short offset, short length) {
-        // TODO
+    private short commandGenKey(byte[] buffer, short inOffset, short length, short outOffset) {
         if (state != STATE_AUTHENTICATED) {
             ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
         }
         
-        byte keyLen = buffer[offset] ;
-        m_secureRandom.generateData(buffer, (short) (offset - 3), keyLen);
+        if (length != 1) {
+            ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+        
+        byte keyLen = buffer[inOffset];
+        if (keyLen <= 0 || keyLen > MAX_KEY_SIZE) {
+            ISOException.throwIt(ISO7816.SW_WRONG_DATA);
+        }
+        
+        m_secureRandom.generateData(buffer, outOffset, keyLen);
         return keyLen;
     }
 
-    private short commandStoreKey(byte[] buffer, short offset, short length) {
+    private short commandStoreKey(byte[] buffer, short inOffset, short length, short outOffset) {
+        ISOException.throwIt(ISO7816.SW_FUNC_NOT_SUPPORTED);
         // TODO
         return -1;
     }
 
-    private short commandLoadKey(byte[] buffer, short offset, short length) {
+    private short commandLoadKey(byte[] buffer, short inOffset, short length, short outOffset) {
+        ISOException.throwIt(ISO7816.SW_FUNC_NOT_SUPPORTED);
         // TODO
         return -1;
     }
 
-    private short commandDelKey(byte[] buffer, short offset, short length) {
+    private short commandDelKey(byte[] buffer, short inOffset, short length, short outOffset) {
+        ISOException.throwIt(ISO7816.SW_FUNC_NOT_SUPPORTED);
         // TODO
         return -1;
     }
 
-    private short commandClose(byte[] buffer, short offset, short length) {
-        // TODO
-        return -1;
+    private short commandClose(byte[] buffer, short inOffset, short length, short outOffset) {
+        resetSession();
+        return 0;
     }
 
-    private short processCommand(byte[] buffer, short offset ) {
+    private short processCommand(byte[] buffer, short offset) {
         /* first byte is the command code; response data should be written
          * to the same buffer and its size returned */
-        byte command = buffer[offset++];
-        short commandLen = readShort(buffer, offset);
-        offset += 2;
+        short inCmdOffset = offset;
+        short inDataLengthOffset = (short)(offset + 1);
+        short inDataOffset = (short)(inDataLengthOffset + 2);
+        
+        short outDataLengthOffset = offset;
+        short outDataOffset = (short)(outDataLengthOffset + 2);
+        
+        byte command = buffer[inCmdOffset];
+        short commandLen = readShort(buffer, inDataLengthOffset);
 	switch(command) {
-            case CMD_AUTH       : commandLen = commandAuth(buffer, offset, commandLen); break;
-            case CMD_CHANGEPW   : commandLen = commandChangePw(buffer, offset, commandLen); break;
-            case CMD_GENKEY     : commandLen = commandGenKey(buffer, offset, commandLen); break;
-            case CMD_STOREKEY   : commandLen = commandStoreKey(buffer, offset, commandLen); break;
-            case CMD_LOADKEY    : commandLen = commandLoadKey(buffer, offset, commandLen); break;
-            case CMD_DELKEY     : commandLen = commandDelKey(buffer, offset, commandLen); break;
-            case CMD_CLOSE      : commandLen = commandClose(buffer, offset, commandLen); break;
+            case CMD_AUTH       : commandLen = commandAuth(buffer, inDataOffset, commandLen, outDataOffset); break;
+            case CMD_CHANGEPW   : commandLen = commandChangePw(buffer, inDataOffset, commandLen, outDataOffset); break;
+            case CMD_GENKEY     : commandLen = commandGenKey(buffer, inDataOffset, commandLen, outDataOffset); break;
+            case CMD_STOREKEY   : commandLen = commandStoreKey(buffer, inDataOffset, commandLen, outDataOffset); break;
+            case CMD_LOADKEY    : commandLen = commandLoadKey(buffer, inDataOffset, commandLen, outDataOffset); break;
+            case CMD_DELKEY     : commandLen = commandDelKey(buffer, inDataOffset, commandLen, outDataOffset); break;
+            case CMD_CLOSE      : commandLen = commandClose(buffer, inDataOffset, commandLen, outDataOffset); break;
             default:
                 ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
                 break;
         }
-                
-        return commandLen;
+        writeShort(buffer, outDataLengthOffset, commandLen);
+        return (short)(2 + commandLen);
     }
 }
