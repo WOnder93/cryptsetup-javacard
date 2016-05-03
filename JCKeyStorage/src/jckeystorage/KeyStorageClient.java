@@ -9,7 +9,6 @@ import applets.KeyStorageApplet;
 import java.math.BigInteger;
 import java.nio.CharBuffer;
 import java.nio.charset.Charset;
-import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import javacard.framework.ISO7816;
@@ -42,7 +41,7 @@ import org.bouncycastle.math.ec.custom.sec.SecP192R1Curve;
  */
 public class KeyStorageClient {
         
-    private static final int MAX_RESPONSE_SIZE = 32767;
+    private static final int MAX_RESPONSE_SIZE = 1024;
     
     private static ECDomainParameters getECParameters() {
         ECCurve curve = new SecP192R1Curve();
@@ -230,16 +229,16 @@ public class KeyStorageClient {
             KeyParameter hmacKey = new KeyParameter(sessionMasterKey);
             hmac256.init(hmacKey);
 
-            byte[] encKey = new byte[hmac256.getMacSize()];
+            byte[] encKeyBytes = new byte[hmac256.getMacSize()];
             hmac256.update(KeyStorageApplet.KEY_LABEL_ENC, 0, KeyStorageApplet.KEY_LABEL_ENC.length);
-            hmac256.doFinal(encKey, 0);
+            hmac256.doFinal(encKeyBytes, 0);
 
-            byte[] authKey = new byte[hmac256.getMacSize()];
+            byte[] authKeyBytes = new byte[hmac256.getMacSize()];
             hmac256.update(KeyStorageApplet.KEY_LABEL_AUTH, 0, KeyStorageApplet.KEY_LABEL_AUTH.length);
-            hmac256.doFinal(authKey, 0);
+            hmac256.doFinal(authKeyBytes, 0);
 
-            this.encKey = new KeyParameter(encKey);
-            this.authKey = new KeyParameter(authKey);
+            encKey = new KeyParameter(encKeyBytes);
+            authKey = new KeyParameter(authKeyBytes);
         }
         
         private byte[] wrapData(byte[] data) throws ClientException {
@@ -351,7 +350,7 @@ public class KeyStorageClient {
             
             try {
                 sendCommand(KeyStorageApplet.CMD_CLOSE, new byte[0]);
-            } catch (ClientException ex) {
+            } catch (ClientException | ISOException ex) {
                 /* ignore exception on closing */
             } finally {
                 closed = true;
