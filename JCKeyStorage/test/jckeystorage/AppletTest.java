@@ -6,6 +6,7 @@
 package jckeystorage;
 
 import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
 import org.bouncycastle.crypto.params.RSAKeyParameters;
 import org.junit.After;
 import org.junit.Before;
@@ -27,7 +28,8 @@ public class AppletTest {
 
     @Before
     public void setUp() throws GeneralSecurityException {
-        client = new KeyStorageClient(SimulatorSmartCardIO.INSTANCE);
+        client = new KeyStorageClient(SimulatorSmartCardIO.INSTANCE,
+                SecureRandom.getInstance("NativePRNGNonBlocking"));
     }
 
     @After

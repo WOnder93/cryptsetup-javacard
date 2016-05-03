@@ -13,6 +13,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
 import java.util.NoSuchElementException;
 import java.util.Scanner;
 import javax.smartcardio.CardException;
@@ -290,7 +291,7 @@ public class JCKeyStorage {
             }
             
             try {
-                KeyStorageClient client = new KeyStorageClient(io);
+                KeyStorageClient client = new KeyStorageClient(io, SecureRandom.getInstanceStrong());
                 if (!client.selectApplet()) {
                     throw new ApplicationException("Unable to select applet!");
                 }

@@ -68,10 +68,9 @@ public class KeyStorageClient {
     private final HMac hmac256;
     private final BlockCipher aesCbc; 
     
-    public KeyStorageClient(SmartCardIO io) throws GeneralSecurityException {
+    public KeyStorageClient(SmartCardIO io, SecureRandom random) {
         this.io = io;
-        
-        random = SecureRandom.getInstanceStrong();
+        this.random = random;
         
         sha1 = new SHA1Digest();
         sha256 = new SHA256Digest();
