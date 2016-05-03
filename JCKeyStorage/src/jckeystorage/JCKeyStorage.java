@@ -14,16 +14,18 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import java.util.NoSuchElementException;
 import java.util.Scanner;
+import javacard.framework.ISOException;
 import javax.smartcardio.CardException;
-import org.bouncycastle.asn1.ASN1Encodable;
 import org.bouncycastle.asn1.ASN1OutputStream;
+import org.bouncycastle.asn1.ASN1Primitive;
+import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.ASN1StreamParser;
 import org.bouncycastle.asn1.pkcs.RSAPublicKey;
 import org.bouncycastle.crypto.RuntimeCryptoException;
 import org.bouncycastle.crypto.params.RSAKeyParameters;
-import org.bouncycastle.util.Arrays;
 
 /**
  * The main class.
@@ -47,7 +49,13 @@ public class JCKeyStorage {
                 System.err.println("ERROR: " + getMessage());
                 Throwable cause = getCause();
                 if (cause != null) {
-                    System.err.println("ERROR: Exception: " + cause.toString());
+                    if (cause instanceof ISOException) {
+                        short sw = ((ISOException)cause).getReason();
+                        System.err.printf("ERROR: ISO exception: %04x (%h)", sw, sw);
+                        System.err.println();
+                    } else {
+                        System.err.println("ERROR: Exception: " + cause.toString());
+                    }
                 }
                 System.exit(1);
             }
@@ -70,11 +78,11 @@ public class JCKeyStorage {
         private RSAKeyParameters readPublicKey() throws ApplicationException {
             try (FileInputStream file = new FileInputStream(pubKeyPath)) {
                 ASN1StreamParser parser = new ASN1StreamParser(file);
-                ASN1Encodable obj = parser.readObject();
-                if (!(obj instanceof RSAPublicKey)) {
+                ASN1Primitive obj = parser.readObject().toASN1Primitive();
+                if (!(obj instanceof ASN1Sequence)) {
                     throw new ApplicationException("Wrong public key file format!");
                 }
-                RSAPublicKey pk = (RSAPublicKey)obj;
+                RSAPublicKey pk = RSAPublicKey.getInstance(obj);
                 return new RSAKeyParameters(false, pk.getModulus(), pk.getPublicExponent());
             } catch(IOException ex) {
                 throw new ApplicationException("Error reading the public key file!", ex);
@@ -84,7 +92,7 @@ public class JCKeyStorage {
         private void writePublicKey(RSAKeyParameters pubkey) throws ApplicationException {
             try (FileOutputStream file = new FileOutputStream(pubKeyPath)) {
                 ASN1OutputStream out = new ASN1OutputStream(file);
-                
+
                 RSAPublicKey pk = new RSAPublicKey(pubkey.getModulus(), pubkey.getExponent());
                 out.writeObject(pk);
             } catch(IOException ex) {
@@ -103,11 +111,12 @@ public class JCKeyStorage {
         private static char[] readNewPassword() throws ApplicationException {
             char[] newPassword = System.console().readPassword("Enter new master password: ");
             char[] verPassword = System.console().readPassword("Verify new master password: ");
-            clearPassword(verPassword);
-            if (!Arrays.areEqual(newPassword, verPassword)) {
+            if (!Arrays.equals(newPassword, verPassword)) {
                 clearPassword(newPassword);
+                clearPassword(verPassword);
                 throw new ApplicationException("The passwords do not match!");
             }
+            clearPassword(verPassword);
             return newPassword;
         }
         
