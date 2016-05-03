@@ -33,6 +33,9 @@ public final class RealSmartCardIO implements SmartCardIO {
     public static RealSmartCardIO openTerminal(String terminalName) throws CardException {
         TerminalFactory factory = TerminalFactory.getDefault();
         CardTerminal terminal = factory.terminals().getTerminal(terminalName);
+        if (terminal == null) {
+            throw new CardException(String.format("Terminal '%s' not found!", terminalName));
+        }
         return new RealSmartCardIO(terminal);
     }
     
