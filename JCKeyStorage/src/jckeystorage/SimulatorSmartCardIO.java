@@ -27,7 +27,17 @@ public class SimulatorSmartCardIO implements SmartCardIO {
     @Override
     public void installApplet(byte[] aidArray, Class appletClass, byte[] installData) {
         AID aid = new AID(aidArray, (short) 0, (byte) aidArray.length);
-        simulator.installApplet(aid, appletClass, installData, (short) 0, (byte) installData.length);
+        
+        byte[] data = new byte[1 + aidArray.length + 1 + 0 + 1 + installData.length];
+        int offset = 0;
+        data[offset++] = (byte)aidArray.length;
+        System.arraycopy(aidArray, 0, data, offset, aidArray.length);
+        offset += aidArray.length;
+        data[offset++] = (byte)0;
+        data[offset++] = (byte)installData.length;
+        System.arraycopy(installData, 0, data, offset, installData.length);
+        
+        simulator.installApplet(aid, appletClass, data, (short)0, (byte)data.length);
     }
 
     @Override

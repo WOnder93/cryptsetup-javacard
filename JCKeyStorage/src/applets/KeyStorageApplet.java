@@ -302,6 +302,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     
     public final boolean select() {
         resetSession();
+        setDHKeyParams();
         return true;
     }
      
@@ -312,7 +313,14 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
      * @param bLength the length in bytes of the data parameter in bArray
      */
     public static void install(byte[] bArray, short bOffset, byte bLength) throws ISOException {
-        KeyStorageApplet applet = new KeyStorageApplet(bArray, bOffset, bLength);
+        /* parse the install info as per the documentation: */
+        byte aidLength = bArray[bOffset++];
+        bOffset += aidLength;
+        byte infoLength = bArray[bOffset++];
+        bOffset += infoLength;
+        byte dataLength = bArray[bOffset++];
+        
+        KeyStorageApplet applet = new KeyStorageApplet(bArray, bOffset, dataLength);
         applet.register();
     }
 
@@ -458,15 +466,20 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         short size;
         switch(apduBuffer[ISO7816.OFFSET_INS]) {
             case INS_GETPUBKEY:
-                // TODO: verify states
                 size = fillPubKey(apduBuffer, apdu.getOffsetCdata());
                 apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
                 break;
             case INS_HANDSHAKE:
+                if (state != STATE_IDLE) {
+                    ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
+                }
                 size = dhHandshake(apdu);
                 apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
                 break;
             case INS_COMMAND:
+                if (state != STATE_KEY_ESTABILISHED && state != STATE_AUTHENTICATED) {
+                    ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
+                }
                 size = InsCommand(apdu);
                 apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
                 break;
@@ -485,8 +498,8 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
         
-        if (masterPassword.check(buffer, inOffset, (byte)length) == false){
-            state = STATE_IDLE;
+        if (!masterPassword.check(buffer, inOffset, (byte)length)) {
+            resetSession();
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
             

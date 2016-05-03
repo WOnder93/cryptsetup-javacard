@@ -32,7 +32,9 @@ JCDK_PATH="$PROJECT_HOME/ext/java_card_kit-2_2_2"
 # Convert to CAP:
 bash "$JCDK_PATH/bin/converter" -classdir "$OUT_PATH" -exportpath "$JCDK_PATH/api_export_files" -verbose -nobanner -out CAP EXP -applet "$APPLET_AID" "$APPLET_CLASS" "$APPLET_PACKAGE" "$APPLET_PACKAGE_AID" "$APPLET_VERSION" || (rm -rf "$OUT_PATH"; exit 1)
 
-read -sp 'Enter the master password: ' MASTER_PWD; echo
+read -sp 'Enter the master password: ' MASTER_PWD || exit 1; echo
+
+MASTER_PWD="$(echo -n "$MASTER_PWD" | hexdump -v -e '/1 "%02X"')"
 
 # Install the applet:
 "$JAVA_HOME/bin/java" -jar "$PROJECT_HOME/ext/gp.jar" --reinstall "$OUT_PATH/$APPLET_PACKAGE/javacard/$APPLET_PACKAGE.cap" --params "$MASTER_PWD" "$@"
