@@ -35,7 +35,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     
     private static boolean arraysEqual(byte[] array1, short offset1, byte[] array2, short offset2, short length) {
         byte different = (byte)0x00;
-        for (short i = 0; i < (short)length; i++) {
+        for (short i = 0; i < length; i++) {
             different |= (byte)(array1[(short)(offset1 + i)] ^ array2[(short)(offset2 + i)]);
         }
         return different == (byte)0x00;
