@@ -11,6 +11,7 @@ import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -75,6 +76,11 @@ public class JCKeyStorage {
                 names = { "-t", "--terminal" },
                 description = "the name of the card terminal to use")
         private String terminalName;
+        
+        @Parameter(
+                names = { "-d", "--dump-file" },
+                description = "the path where to write APDU dump")
+        private String dumpFile;
         
         private RSAKeyParameters readPublicKey() throws ApplicationException {
             try (FileInputStream file = new FileInputStream(pubKeyPath)) {
@@ -353,7 +359,7 @@ public class JCKeyStorage {
             JCommander jcCmd = jc.getCommands().get(jc.getParsedCommand());
             Command cmd = (Command)jcCmd.getObjects().get(0);
             
-            RealSmartCardIO io;
+            SmartCardIO io;
             try {
                 if (terminalName == null) {
                     io = RealSmartCardIO.openFirstTerminal();
@@ -362,6 +368,16 @@ public class JCKeyStorage {
                 }
             } catch(CardException ex) {
                 throw new ApplicationException("Card error!", ex);
+            }
+            
+            FileWriter out = null;
+            if (dumpFile != null) {
+                try {
+                    out = new FileWriter(dumpFile);
+                } catch (IOException ex) {
+                    throw new ApplicationException("Error opening dump file!", ex);
+                }
+                io = new DumpingSmartCardIO(io, out);
             }
             
             try {
@@ -376,6 +392,14 @@ public class JCKeyStorage {
                 throw new ApplicationException("Crypto error!", ex);
             } catch (ClientException ex) {
                 throw new ApplicationException("KeyStorageClient: " + ex.getMessage(), ex.getCause());
+            } finally {
+                if (out != null) {
+                    try {
+                        out.close();
+                    } catch(IOException ex) {
+                        /* nothing to do here... */
+                    }
+                }
             }
         }
         
