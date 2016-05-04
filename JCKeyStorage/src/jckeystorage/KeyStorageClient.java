@@ -221,8 +221,13 @@ public class KeyStorageClient {
             ECPublicKeyParameters cardPub = new ECPublicKeyParameters(cardPubPoint, ecParams);
 
             ecdh.init(keyPair.getPrivate());
-            byte[] sharedSecret = ecdh.calculateAgreement(cardPub).toByteArray();
-
+            byte[] num = ecdh.calculateAgreement(cardPub).toByteArray();
+            /* truncate to ecdh.getFieldSize() as per IEEE Std 1363-2000 */
+            byte[] sharedSecret = new byte[ecdh.getFieldSize()];
+            int numBytes = Math.min(num.length, sharedSecret.length);
+            System.arraycopy(num, num.length - numBytes, sharedSecret, sharedSecret.length - numBytes, numBytes);
+            Arrays.fill(sharedSecret, 0, sharedSecret.length - numBytes, (byte)0);
+            
             byte[] sessionMasterKey = new byte[sha1.getDigestSize()];
             sha1.update(sharedSecret, 0, sharedSecret.length); 
             sha1.doFinal(sessionMasterKey, 0);
