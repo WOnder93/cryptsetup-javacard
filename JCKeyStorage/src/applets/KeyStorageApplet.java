@@ -252,10 +252,12 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         signature = Signature.getInstance(Signature.ALG_RSA_SHA_PKCS1, false);
         signature.init(signingKeyPair.getPrivate(), Signature.MODE_SIGN);
         
-        dhPubKey = (ECPublicKey) KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC,  EC_BITS, false);
-        dhPrivKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, EC_BITS, false);
+        dhKeyPair = new KeyPair(KeyPair.ALG_EC_FP,  EC_BITS);
+        dhPubKey  = (ECPublicKey) dhKeyPair.getPublic();
+        dhPrivKey = (ECPrivateKey)dhKeyPair.getPrivate();
         
-        dhKeyPair = new KeyPair(dhPubKey, dhPrivKey);
+        setDHKeyParams();
+        
         sessKeyAgreement = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DHC, false);
         
         cipherKey = (AESKey)KeyBuilder.buildKey(KeyBuilder.TYPE_AES_TRANSIENT_DESELECT,
@@ -287,13 +289,6 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         dhPubKey.setG(auxBuffer, (short)0, gSize);
         dhPubKey.setR(EC_FP_R,   (short)0, (short)EC_FP_R.length);
         dhPubKey.setK(EC_FP_K);
-
-        dhPrivKey.setFieldFP(EC_FP_P, (short)0, (short)EC_FP_P.length);
-        dhPrivKey.setA(EC_FP_A,   (short)0, (short)EC_FP_A.length);
-        dhPrivKey.setB(EC_FP_B,   (short)0, (short)EC_FP_B.length);
-        dhPrivKey.setG(auxBuffer, (short)0, gSize);
-        dhPrivKey.setR(EC_FP_R,   (short)0, (short)EC_FP_R.length);
-        dhPrivKey.setK(EC_FP_K);
     }
     
     private void resetSession() {
@@ -302,7 +297,6 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
     
     public final boolean select() {
         resetSession();
-        setDHKeyParams();
         return true;
     }
      
@@ -391,8 +385,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         short cardpdLengthOffset = (short)(pdOffset + pubdataLen);
         short cardpdOffset = (short)(cardpdLengthOffset + (short)2);
         
-        ECPublicKey pubKey = (ECPublicKey)dhKeyPair.getPublic();
-        short cardpdLength = pubKey.getW(apdubuf, cardpdOffset);
+        short cardpdLength = dhPubKey.getW(apdubuf, cardpdOffset);
         writeShort(apdubuf, cardpdLengthOffset, cardpdLength);
         
         short signedDataLength = (short)2;
@@ -500,7 +493,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         
         if (!masterPassword.check(buffer, inOffset, (byte)length)) {
             resetSession();
-            ISOException.throwIt(ISO7816.SW_WRONG_DATA);
+            ISOException.throwIt(ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED);
         }
             
         state = STATE_AUTHENTICATED;

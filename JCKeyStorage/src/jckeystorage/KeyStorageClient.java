@@ -364,7 +364,7 @@ public class KeyStorageClient {
             try {
                 sendCommand(KeyStorageApplet.CMD_AUTH, encPassword);
             } catch (ISOException ex) {
-                if (ex.getReason() == ISO7816.SW_WRONG_DATA) {
+                if (ex.getReason() == ISO7816.SW_SECURITY_STATUS_NOT_SATISFIED) {
                     throw new ClientException("Invalid password!", ex);
                 }
                 throw ex;
