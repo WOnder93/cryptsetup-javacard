@@ -12,11 +12,12 @@ import com.beust.jcommander.Parameters;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.Charset;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.util.Arrays;
-import java.util.NoSuchElementException;
-import java.util.Scanner;
 import javacard.framework.ISOException;
 import javax.smartcardio.CardException;
 import org.bouncycastle.asn1.ASN1OutputStream;
@@ -51,7 +52,7 @@ public class JCKeyStorage {
                 if (cause != null) {
                     if (cause instanceof ISOException) {
                         short sw = ((ISOException)cause).getReason();
-                        System.err.printf("ERROR: ISO exception: %04x (%h)", sw, sw);
+                        System.err.printf("ERROR: ISO exception: %04x (%d)", sw, sw);
                         System.err.println();
                     } else {
                         System.err.println("ERROR: Exception: " + cause.toString());
@@ -121,20 +122,11 @@ public class JCKeyStorage {
         }
         
         private static byte[] parseUuid(String uuidStr) throws ApplicationException {
-            Scanner scanner = new Scanner(uuidStr);
-            scanner.useDelimiter("-");
-            byte[] res = new byte[40];
-            try {
-                for (int i = 0; i < 40; i++) {
-                    res[i] = scanner.nextByte(16);
-                }
-            } catch(NoSuchElementException ex) {
-                throw new ApplicationException("Invalid UUID!", ex);
+            byte[] res = uuidStr.getBytes(Charset.forName("ASCII"));
+            if (res.length > KeyStorageApplet.UUID_LENGTH) {
+                throw new ApplicationException("Invalid UUID length!");
             }
-            if (scanner.hasNext()) {
-                throw new ApplicationException("Invalid UUID!");
-            }
-            return res;
+            return Arrays.copyOf(res, KeyStorageApplet.UUID_LENGTH);
         }
         
         private interface Command {
@@ -170,95 +162,167 @@ public class JCKeyStorage {
 
         @Parameters(commandDescription = "Generates the key using the card.")
         private class GenerateKeyCommand implements Command {
-            @Parameter(names = "UUID", description = "the size of the key to generate", required = true)
+            @Parameter(names = { "-s", "--key-size" }, description = "the size of the key to generate (in bytes)", required = true)
             private int keySize;
+
+            @Parameter(names = { "-o", "--out" }, description = "the file where to write the key")
+            private String outputFile;
 
             @Override
             public void run(KeyStorageClient client) throws ClientException, ApplicationException {
                 if (keySize <= 0 || keySize > KeyStorageApplet.MAX_KEY_SIZE) {
                     throw new ApplicationException("Invalid key size (must be from 1 to " + KeyStorageApplet.MAX_KEY_SIZE + ")!");
                 }
-                RSAKeyParameters cardKey = readPublicKey();
-                KeyStorageClient.Session session = client.openSession(cardKey);
-                byte[] key = null;
+                OutputStream out = System.out;
+                boolean close = false;
                 try {
-                    session.authenticate(readPassword());
-                    key = session.generateKey(keySize);
-                    System.out.write(key, 0, keySize);
-                } finally {
-                    if (key != null) {
-                        Arrays.fill(key, (byte)0);
+                    if (outputFile != null) {
+                        close = true;
+                        out = new FileOutputStream(outputFile);
                     }
-                    session.close();
+                    
+                    RSAKeyParameters cardKey = readPublicKey();
+                    KeyStorageClient.Session session = client.openSession(cardKey);
+                    byte[] key = null;
+                    try {
+                        session.authenticate(readPassword());
+                        key = session.generateKey(keySize);
+                        out.write(key, 0, keySize);
+                    } finally {
+                        if (key != null) {
+                            Arrays.fill(key, (byte)0);
+                        }
+                        session.close();
+                    }
+                } catch(IOException ex) {
+                    throw new ClientException("Error writing the key!", ex);
+                } finally {
+                    if (close) {
+                        try {
+                            out.close();
+                        } catch (IOException ex) {
+                            /* nothing to do here... */
+                        }
+                    }
                 }
             }
         }
         
         @Parameters(commandDescription = "Stores the key for a given partition.")
         private class StoreKeyCommand implements Command {
-            @Parameter(names = "UUID", description = "the partition's UUID", required = true)
+            @Parameter(names = { "-u", "--uuid" }, description = "the partition's UUID", required = true)
             private String uuidString;
+
+            @Parameter(names = { "-i", "--in" }, description = "the file to read the key from")
+            private String inputFile;
 
             @Override
             public void run(KeyStorageClient client) throws ClientException, ApplicationException {
                 byte[] uuid = parseUuid(uuidString);
                 
-                RSAKeyParameters cardKey = readPublicKey();
-                KeyStorageClient.Session session = client.openSession(cardKey);
                 byte[] key = new byte[KeyStorageApplet.MAX_KEY_SIZE];
+                int keySize = 0;
                 try {
-                    int keySize = 0;
-                    for (;;) {
-                        int size = System.in.read(key, keySize, key.length - keySize);
-                        if (size == 0) {
-                            throw new ApplicationException("Key too long!");
+                    InputStream in = System.in;
+                    boolean close = false;
+                    try {
+                        if (inputFile != null) {
+                            close = true;
+                            in = new FileInputStream(inputFile);
                         }
-                        if (size == -1) {
-                            break;
+
+                        for (;;) {
+                            int size = in.read(key, keySize, key.length - keySize);
+                            if (size == 0) {
+                                throw new ApplicationException("Key too long!");
+                            }
+                            if (size == -1) {
+                                break;
+                            }
+                            keySize += size;
                         }
-                        keySize += size;
+                    } catch(IOException ex) {
+                        throw new ClientException("Error reading the key!", ex);
+                    } finally {
+                        if (close) {
+                            try {
+                                in.close();
+                            } catch (IOException ex) {
+                                /* nothing to do here... */
+                            }
+                        }
                     }
                     if (keySize == 0) {
                         throw new ApplicationException("Key too short!");
                     }
-                    key = Arrays.copyOf(key, keySize);
-                    session.storeKey(uuid, key);
-                } catch (IOException ex) {
-                    throw new ApplicationException("Error reading key!", ex);
+                    byte[] newKey = Arrays.copyOf(key, keySize);
+                    Arrays.fill(key, (byte)0);
+                    key = newKey;
+
+                    RSAKeyParameters cardKey = readPublicKey();
+                    KeyStorageClient.Session session = client.openSession(cardKey);
+                    try {
+                        session.authenticate(readPassword());
+                        session.storeKey(uuid, key);
+                    } finally {
+                        session.close();
+                    }
                 } finally {
                     Arrays.fill(key, (byte)0);
-                    session.close();
                 }
             }
         }
         
         @Parameters(commandDescription = "Loads the key for a given partition.")
         private class LoadKeyCommand implements Command {
-            @Parameter(names = "UUID", description = "the partition's UUID", required = true)
+            @Parameter(names = { "-u", "--uuid" }, description = "the partition's UUID", required = true)
             private String uuidString;
+
+            @Parameter(names = { "-o", "--out" }, description = "the file where to write the key")
+            private String outputFile;
 
             @Override
             public void run(KeyStorageClient client) throws ClientException, ApplicationException {
                 byte[] uuid = parseUuid(uuidString);
                 
-                RSAKeyParameters cardKey = readPublicKey();
-                KeyStorageClient.Session session = client.openSession(cardKey);
-                byte[] key = null;
+                OutputStream out = System.out;
+                boolean close = false;
                 try {
-                    key = session.loadKey(uuid);
-                    System.out.write(key, 0, key.length);
-                } finally {
-                    if (key != null) {
-                        Arrays.fill(key, (byte)0);
+                    if (outputFile != null) {
+                        close = true;
+                        out = new FileOutputStream(outputFile);
                     }
-                    session.close();
+                    
+                    RSAKeyParameters cardKey = readPublicKey();
+                    KeyStorageClient.Session session = client.openSession(cardKey);
+                    byte[] key = null;
+                    try {
+                        session.authenticate(readPassword());
+                        key = session.loadKey(uuid);
+                        out.write(key, 0, key.length);
+                    } finally {
+                        if (key != null) {
+                            Arrays.fill(key, (byte)0);
+                        }
+                        session.close();
+                    }
+                } catch(IOException ex) {
+                    throw new ClientException("Error writing the key!", ex);
+                } finally {
+                    if (close) {
+                        try {
+                            out.close();
+                        } catch (IOException ex) {
+                            /* nothing to do here... */
+                        }
+                    }
                 }
             }
         }
         
         @Parameters(commandDescription = "Deletes the key for a given partition.")
         private class DeleteKeyCommand implements Command {
-            @Parameter(names = "UUID", description = "the partition's UUID", required = true)
+            @Parameter(names = { "-u", "--uuid" }, description = "the partition's UUID", required = true)
             private String uuidString;
 
             @Override
@@ -268,6 +332,7 @@ public class JCKeyStorage {
                 RSAKeyParameters cardKey = readPublicKey();
                 KeyStorageClient.Session session = client.openSession(cardKey);
                 try {
+                    session.authenticate(readPassword());
                     session.deleteKey(uuid);
                 } finally {
                     session.close();
@@ -300,11 +365,13 @@ public class JCKeyStorage {
             }
             
             try {
-                KeyStorageClient client = new KeyStorageClient(io, SecureRandom.getInstanceStrong());
+                KeyStorageClient client = new KeyStorageClient(io, SecureRandom.getInstance("NativePRNGNonBlocking"));
                 if (!client.selectApplet()) {
                     throw new ApplicationException("Unable to select applet!");
                 }
                 cmd.run(client);
+            } catch(ISOException ex) {
+                throw new ApplicationException("Card applet error!", ex);
             } catch(GeneralSecurityException | RuntimeCryptoException ex) {
                 throw new ApplicationException("Crypto error!", ex);
             } catch (ClientException ex) {
