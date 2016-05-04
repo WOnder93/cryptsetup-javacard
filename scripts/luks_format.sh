@@ -59,4 +59,4 @@ echo "Please enter an emergency recovery passphrase in case of card loss..."
 cryptsetup luksAddKey -d <(echo -n "$TMP_PASSWORD") "$DEVICE" || exit 1
 cryptsetup luksKillSlot -q "$DEVICE" 1 || exit 1
 
-echo "Successfully formated device '$DEVICE'!"
+echo "Successfully formatted device '$DEVICE'!"
