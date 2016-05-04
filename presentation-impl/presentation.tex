@@ -1,0 +1,87 @@
+\documentclass[12pt, t]{beamer}
+\usetheme{Frankfurt}
+\usepackage[utf8]{inputenc}
+\usepackage[IL2]{fontenc}
+\usepackage[english]{babel}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\author{Ondrej Mosnáček, Manoja Kumar Das, \\Mmabatho Idah Masemene}
+\title{Cryptsetup-javacard}
+\subtitle{A JavaCard key manager for LUKS}
+\institute{PV204 - Security Technologies}
+\date{May 5, 2015}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+  \begin{center}
+    \url{https://github.com/WOnder93/cryptsetup-javacard}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Use case}
+  \begin{itemize}
+    \item disk encryption on Linux (via Cryptsetup\footnote{\url{https://gitlab.com/cryptsetup/cryptsetup}})
+    \item the card stores the encryption keys, protected by a master password
+    \item user actions:
+    \begin{itemize}
+      \item \textbf{change master password}
+      \item \textbf{create an encrypted partition} (card generates and stores the key)
+      \item \textbf{unlock an encrypted partition} (encryption key is loaded from card, decrypted contents are mapped to a new block device)
+      \item \textbf{erase an encrypted partition} (encryption key removed from card, partition header is erased)
+    \end{itemize}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Components}
+  \begin{itemize}
+    \item \textbf{JavaCard applet -- KeyStorageApplet}
+    \item \textbf{Host application -- JCKeyStorage}
+    \begin{itemize}
+      \item written in Java
+      \item command-line interface for communicating with the applet
+    \end{itemize}
+    \item \textbf{User interface}
+    \begin{itemize}
+      \item a set of shell scripts
+      \item a ``bridge'' between JCKeyStorage and Cryptsetup
+      \item simple commands corresponding to the use cases
+      \item includes applet install/delete scripts
+      \item example:
+    \end{itemize}
+  \end{itemize}
+  \scriptsize
+  \begin{verbatim}
+$ ./luks_erase.sh card-pk.ber 'ACS ACR1281 1S Dual Reader 00 00' /dev/loop0
+Deleting key of partition 68ae5cd9-5614-49fd-a089-8e6e22208930...
+Enter master password: 
+Erasing the partition header...
+Successfully erased keys for device '/dev/loop0'!
+  \end{verbatim}
+\end{frame}
+
+\begin{frame}{Secure channel}
+  \begin{itemize}
+    \item Priniciple:
+    \begin{enumerate}
+      \item ECDH key exchange used to derive session keys
+      \item communication encrypted with AES-CBC and integrity-protected using HMAC-SHA256
+    \end{enumerate}
+    \item the card-to-host part of the ECDH key exchange is signed using card's RSA key (to prevent MitM attack)
+    \item card's public RSA key must be downloaded from the card in a secure environment and stored on the host
+    \item user(host)-to-card authentication done by sending the master password over the secure channel
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Bug in JCardSim}
+  \begin{itemize}
+    \item during development, we discovered a bug in JCardSim's javacard.security.KeyAgreement implementation
+    \item about 50 \% of the time the key exchange would produce different keys than the real card
+    \item pull request coming soon...
+  \end{itemize}
+\end{frame}
+\end{document}
