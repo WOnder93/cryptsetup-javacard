@@ -15,14 +15,15 @@ Host machine:
  * JDK 1.8
  * [Apache Ant](https://ant.apache.org/)
  * [JUnit 4](http://junit.org/junit4/)
+ * JCDK 2.2.2 (binaries included)
  * [JCardSim 3.0.4](https://jcardsim.org) (binary included)
  * [Bouncy Castle 1.54](https://bouncycastle.org) (binary included)
  * [JCommander 1.49](http://jcommander.org/) (binary included)
  * [GlobalPlaformPro](https://github.com/martinpaljak/GlobalPlatformPro) (binary included)
- * (for development) [NetBeans IDE 8](https://netbeans.org/)
+ * [NetBeans IDE 8](https://netbeans.org/) (for development)
 
 Smart card:
- * JavaCard 2.2.2 (for required algorithms see section Algorithms)
+ * JavaCard 2.2.2 (for required algorithms see section *Algorithms*)
 
 ## Usage
 
