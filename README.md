@@ -23,7 +23,7 @@ Host machine:
  * [NetBeans IDE 8](https://netbeans.org/) (for development)
 
 Smart card:
- * JavaCard 2.2.2 (for required algorithms see section *Algorithms*)
+ * JavaCard 2.2.2 (for required algorithms see section *Required JavaCard algorithms*)
 
 ## Usage
 
@@ -147,3 +147,5 @@ The applet requires the card to support the following algorithms:
  * `ALG_AES_BLOCK_128_CBC_NOPAD`
 
 The card must also support ISO7816-4 defined extended length APDU messages.
+
+An example of a card that supports all these features is [SmartCafe Expert 6.0 80K Dual](http://www.smartcardfocus.com/shop/ilp/id~684/smartcafe-expert-6-0-80k-dual-/p/index.shtml).
