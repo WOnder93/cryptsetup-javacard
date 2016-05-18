@@ -1,0 +1,109 @@
+\documentclass[12pt, t]{beamer}
+\usetheme{Warsaw}
+\usepackage[utf8]{inputenc}
+\usepackage[IL2]{fontenc}
+\usepackage[english]{babel}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\author{Ondrej Mosnáček, Manoja Kumar Das, \\Mmabatho Idah Masemene}
+\title{Project review}
+\subtitle{Reviewed team: C}
+\institute{PV204 - Security Technologies}
+\date{May 19, 2015}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{The reviewed project}
+  \begin{itemize}
+    \item \emph{Tomcat / Web Browser Based Authentication using JavaCard}
+    \item \textbf{Original goal:}
+      \begin{itemize}
+        \item to provide web-based authentication using JavaCard
+      \end{itemize}
+    \item \textbf{What was actually implemented:}
+      \begin{itemize}
+        \item a server application that checks if the client sent the string ``Auth'' and sends back the string ``Authorized''
+        \item a client Java browser applet that sends the string ``Auth'' to the server
+        \item a JavaCard applet for password-based authentication with a very crude PC application
+        \item the browser applet does not communicate with the card at all
+      \end{itemize}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Design}
+  \begin{itemize}
+    \item server and card share a master password and counter
+    \item client downloads a Java applet from the server
+    \item the browser applet retrieves SHA-1(Password XOR Counter) from the card (and the counter is incremented in the card)
+    \item the browser applet sends the hash to the server
+    \item the server computes the expected hash and increments the counter
+    \item the server checks if the recieved hash matches the expected one
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Design flaws}
+  \begin{enumerate}
+    \item \textbf{the crypto}
+      \begin{itemize}
+        \item SHA-1(Password XOR Counter)
+        \item non-standard construct (possibly prone to cryptanalysis)
+        \item ``Never design your own crypto!''
+        \item SHA-1 is not considered secure nowadays (but this is addressed in the documentation)
+        \item a proper password-based KDF should be used instead (or at least HMAC)
+      \end{itemize}
+    \item \textbf{no secure channel between client and server}
+      \begin{itemize}
+        \item design does not mandate the use of TLS for client-server communication
+        \item an MITM attacker could hijack the authenticated session after the hash has been sent
+      \end{itemize}
+      
+      ~
+    \item \textbf{using a Java browser applet}
+      \begin{itemize}
+        \item Java browser plugins are now deprecated\footnote{\url{https://blogs.oracle.com/java-platform-group/entry/moving_to_a_plugin_free}}
+        \item historically suffered from many vulnerabilites
+        \item in this case, the applet requires unlimited permissions -- security problem if server gets compromised
+      \end{itemize}
+  \end{enumerate}
+%  \begin{center}
+%    \includegraphics[scale=0.3]{no-java.png}
+%  \end{center}
+\end{frame}
+
+\begin{frame}[fragile]{Implementation flaws}
+  \begin{itemize}
+    \item \textbf{JavaCard applet vulnerability}
+      \begin{itemize}
+        \item access to JavaCard is protected by user PIN
+        \item the PIN is set using \verb|INS_SETPIN| APDU instruction
+        \item this instruction is not authenticated (the old PIN is not required)
+        \item attacker can just set the PIN to a new value and authenticate to the card
+        \item after authentication, the attacker can pre-generate a sequence of valid hashes
+      \end{itemize}
+  \end{itemize}
+  \begin{center}
+    \includegraphics[scale=0.07]{facepalm.jpg}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Summary}
+  \begin{itemize}
+    \item original goals not achieved
+    \item several flaws in the design
+    \item one serious flaw in the implementation
+    \item most code was copied from the Internet/study materials; only small parts were modified
+    \item some useless functionality was left over from the original code
+     \begin{itemize}
+       \item AES encryption and RSA signing in the JavaCard applet
+       \item a file containing arbitrary sentences to be returned by the server
+     \end{itemize}
+  \end{itemize}
+\end{frame}
+\end{document}
