@@ -32,13 +32,18 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         value >>= (short)8;
         buf[offset] = (byte)(value & (short)0xFF);
     }
-    
-    private static boolean arraysEqual(byte[] array1, short offset1, byte[] array2, short offset2, short length) {
+    // chnaged boolean comparision to byte comparision to counter fault induction attack.
+    private static byte arraysEqual(byte[] array1, short offset1, byte[] array2, short offset2, short length) {
         byte different = (byte)0x00;
         for (short i = 0; i < length; i++) {
             different |= (byte)(array1[(short)(offset1 + i)] ^ array2[(short)(offset2 + i)]);
         }
-        return different == (byte)0x00;
+        if(different == (byte)0x00){
+            return SUCCESS;
+        }else{
+            return FAILURE;
+        }
+        //return different == (byte)0x00;
     }
     
     public static class HMAC {
@@ -102,7 +107,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             auxBuffer = JCSystem.makeTransientByteArray(hmac.getLength(), JCSystem.CLEAR_ON_DESELECT);
         }
 
-        public final boolean verify(byte[] inBuffer, short inOffset, short inLength, byte[] sigBuffer, short sigOffset) {
+        public final byte verify(byte[] inBuffer, short inOffset, short inLength, byte[] sigBuffer, short sigOffset) {
             hmac.sign(inBuffer, inOffset, inLength, auxBuffer, (short)0);
             try {
                 return arraysEqual(sigBuffer, sigOffset, auxBuffer, (short)0, hmac.getLength());
@@ -202,11 +207,13 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         (byte)0xB4, (byte)0xD2, (byte)0x28, (byte)0x31,
     };
     public static final short EC_FP_K = 1;
-    
-    private static final short STATE_IDLE = (short)0;
-    private static final short STATE_KEY_ESTABILISHED = (short)1;
-    private static final short STATE_AUTHENTICATED = (short)2;
-    
+    // state vlaues selected with aim to increase the hammming distance to prevent against fault incduction attack
+    private static final short STATE_IDLE = (short)0x4CCC;
+    private static final short STATE_KEY_ESTABILISHED = (short)0x5555;
+    private static final short STATE_AUTHENTICATED = (short)0x2AAA;
+    //Return Status Constant
+    public static final byte SUCCESS = 0x55;
+    public static final byte FAILURE = 0x2A;
     private static final short AUX_BUFFER_SIZE = 64;
     
     private short state;
@@ -411,7 +418,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         
         short apduLen = (short)(dataOffset + dataLen);
         
-	if (!macVerifier.verify(apdubuf, seqNumOffset, (short)(apduLen - seqNumOffset), apdubuf, dataOffset)) {
+	if (macVerifier.verify(apdubuf, seqNumOffset, (short)(apduLen - seqNumOffset), apdubuf, dataOffset)==SUCCESS) {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         
@@ -465,9 +472,14 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             case INS_HANDSHAKE:
                 if (state != STATE_IDLE) {
                     ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
+                }else{
+                    if(state == STATE_IDLE){
+                        size = dhHandshake(apdu);
+                        apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
+                    }else{
+                        ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
+                    }
                 }
-                size = dhHandshake(apdu);
-                apdu.setOutgoingAndSend(apdu.getOffsetCdata(), size);
                 break;
             case INS_COMMAND:
                 if (state != STATE_KEY_ESTABILISHED && state != STATE_AUTHENTICATED) {
@@ -509,7 +521,16 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
         
-        masterPassword.update(buffer, inOffset, (byte)length);
+        // Double checking sensitive operation
+        if (state == STATE_AUTHENTICATED) {
+            if (state != STATE_AUTHENTICATED) {
+                ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
+            } else {
+                masterPassword.update(buffer, inOffset, (byte) length);
+            }
+        } else {
+            ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
+        }
         return 0;
     }
 
@@ -527,7 +548,15 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             ISOException.throwIt(ISO7816.SW_WRONG_DATA);
         }
         
-        secureRandom.generateData(buffer, outOffset, keyLen);
+        if (state == STATE_AUTHENTICATED) {
+            if (state != STATE_AUTHENTICATED) {
+                ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
+            } else {
+                secureRandom.generateData(buffer, outOffset, keyLen);
+            }
+        } else {
+            ISOException.throwIt(ISO7816.SW_COMMAND_NOT_ALLOWED);
+        }
         return keyLen;
     }
     
@@ -583,7 +612,7 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
             if (keyStore[(short)(offset + UUID_LENGTH)] == 0) {
                 continue;
             }
-            if (arraysEqual(uuid, uuidOffset, keyStore, offset, UUID_LENGTH)) {
+            if (arraysEqual(uuid, uuidOffset, keyStore, offset, UUID_LENGTH)==SUCCESS) {
                 return offset;
             }
         }
