@@ -202,10 +202,10 @@ public class KeyStorageApplet extends Applet implements ExtendedLength {
         (byte)0xB4, (byte)0xD2, (byte)0x28, (byte)0x31,
     };
     public static final short EC_FP_K = 1;
-    
-    private static final short STATE_IDLE = (short)0;
-    private static final short STATE_KEY_ESTABILISHED = (short)1;
-    private static final short STATE_AUTHENTICATED = (short)2;
+    //Updated State Contsants Updated with Higher Hamming Distance to prevent induction attack. 
+    private static final short STATE_IDLE = (short)0x4CCC;
+    private static final short STATE_KEY_ESTABILISHED = (short)0x5555;
+    private static final short STATE_AUTHENTICATED = (short)0x2AAA;
     
     private static final short AUX_BUFFER_SIZE = 64;
     
